@@ -12,6 +12,7 @@ import { useToolBridge } from './state/useToolBridge'
 import { useVoiceErrorStore } from './state/voiceErrorStore'
 import { subscribeAmplitude } from './hud/core/amplitudeBus'
 import { MicCapture, describeMicError } from './audio/capture'
+import { PresenceMicCapture } from './audio/presenceCapture'
 import { TtsPlayback } from './audio/playback'
 
 const HUD_STATES: readonly HudState[] = [
@@ -41,8 +42,55 @@ function isHudState(v: string): v is HudState {
 export default function App(): React.JSX.Element {
   const micRef = useRef<MicCapture | null>(null)
   const ttsRef = useRef<TtsPlayback | null>(null)
+  const presenceMicRef = useRef<PresenceMicCapture | null>(null)
+  const presenceMicStartingRef = useRef(false)
 
   useToolBridge()
+
+  // Presence's always-on wake-word mic — strictly driven by main's
+  // presence:state broadcasts (micActive is only ever true while Presence
+  // is 'sleeping': enabled, engine ready, no session active, not muted).
+  // Never started/stopped from any local guess about state, so it can
+  // never disagree with main about whether the wake-word mic should be
+  // running — see presence/index.ts's state precedence.
+  useEffect(() => {
+    async function syncPresenceMic(micActive: boolean): Promise<void> {
+      if (micActive) {
+        if (presenceMicRef.current || presenceMicStartingRef.current) return
+        presenceMicStartingRef.current = true
+        const mic = new PresenceMicCapture()
+        try {
+          await mic.start()
+          presenceMicRef.current = mic
+        } catch (err) {
+          console.error('[jarvis] presence mic capture failed:', err)
+          window.jarvis.reportVoiceError({ message: describeMicError(err), stage: 'presence-mic' })
+        } finally {
+          presenceMicStartingRef.current = false
+        }
+      } else {
+        presenceMicRef.current?.stop()
+        presenceMicRef.current = null
+      }
+    }
+
+    const unsubscribe = window.jarvis.onPresenceState((status) => {
+      void syncPresenceMic(Boolean(status.micActive))
+    })
+    // The first presence:state broadcast can race this window's own
+    // load (main calls presence.start() right after creating it) — ask
+    // directly too, so Presence doesn't silently stay off until the next
+    // state change happens to fire.
+    window.jarvis.getPresenceStatus().then((status) => {
+      void syncPresenceMic(Boolean((status as { micActive?: boolean }).micActive))
+    })
+
+    return () => {
+      unsubscribe()
+      presenceMicRef.current?.stop()
+      presenceMicRef.current = null
+    }
+  }, [])
 
   // Ambient is the only window with a real audio graph — forward its live
   // amplitude (throttled) so Command Center's core can react to it too,

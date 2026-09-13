@@ -108,7 +108,7 @@ const jarvisAPI = {
   /** Config-path diagnostics — config dir, which .env (if any) was found, and per-key presence. Never key values. */
   getConfigDiagnostics: (): Promise<unknown> => ipcRenderer.invoke('config:diagnostics'),
   /** First-run/API-config UI's save action — writes to the canonical .env, no restart required. */
-  saveApiKeys: (keys: { anthropic?: string; deepgram?: string; elevenlabs?: string }): Promise<unknown> =>
+  saveApiKeys: (keys: { anthropic?: string; deepgram?: string; elevenlabs?: string; picovoice?: string }): Promise<unknown> =>
     ipcRenderer.invoke('config:save-keys', keys),
 
   // --- Memory (Command Center Memory panel) ---
@@ -122,6 +122,19 @@ const jarvisAPI = {
   /** Fired at most once per 50/75/90% threshold crossed, per day/month period — see usage/budgetManager.ts. */
   onBudgetWarning: (cb: (payload: { period: 'daily' | 'monthly'; threshold: number; spentUsd: number; limitUsd: number }) => void) =>
     on('usage:warning', cb),
+
+  // --- Presence / hands-free (Command Center Presence panel + Ambient's presence mic) ---
+  getPresenceStatus: (): Promise<unknown> => ipcRenderer.invoke('presence:status'),
+  setPresenceEnabled: (enabled: boolean): Promise<unknown> => ipcRenderer.invoke('presence:set-enabled', enabled),
+  setPresenceLaunchAtLogin: (launchAtLogin: boolean): Promise<unknown> => ipcRenderer.invoke('presence:set-launch-at-login', launchAtLogin),
+  setPresenceMuted: (muted: boolean): Promise<unknown> => ipcRenderer.invoke('presence:set-muted', muted),
+  toggleMuted: (): Promise<unknown> => ipcRenderer.invoke('presence:toggle-muted'),
+  /** Broadcast on every Presence state/config change — Ambient uses this to start/stop its own wake-word mic capture; Command Center uses it for the Presence panel. */
+  onPresenceState: (cb: (status: Record<string, unknown>) => void) => on('presence:state', cb),
+  /** Continuous PCM16 stream from Ambient's always-on wake-word mic — see audio/presenceCapture.ts. Only ever sent while Presence is 'sleeping'. */
+  sendPresenceAudioChunk(chunk: ArrayBuffer): void {
+    ipcRenderer.send('presence:audio-chunk', chunk)
+  },
 
   /** Dev-only — see ipc.ts's 'dev:test-agent-turn'. Not registered in production; rejects there. */
   devTestAgentTurn: (text: string): Promise<unknown> => ipcRenderer.invoke('dev:test-agent-turn', text),

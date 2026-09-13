@@ -34,7 +34,8 @@ function isLegacy(parsed: unknown): parsed is LegacyUsageFile {
   return typeof parsed === 'object' && parsed !== null && !('version' in parsed)
 }
 
-function loadUsageFile(): UsageFile {
+/** Second element is true exactly once, the run that actually performed the migration — the caller uses this to persist the migrated shape immediately rather than leaving the on-disk file in its legacy shape (and re-logging the migration) until the next unrelated usage event happens to trigger a save. */
+function loadUsageFile(): [UsageFile, boolean] {
   try {
     const raw = JSON.parse(readFileSync(usageFilePath(), 'utf-8'))
     if (isLegacy(raw)) {
@@ -43,12 +44,12 @@ function loadUsageFile(): UsageFile {
       file.allTime.elevenLabsChars = raw.ttsCharsTotal ?? 0
       file.allTime.sessionCount = raw.sessionCount ?? 0
       logInfo('usage', 'migrated legacy usage.json (STT seconds/TTS chars/session count) into the new per-provider ledger — daily/monthly history starts fresh from today.')
-      return file
+      return [file, true]
     }
-    if (raw.version === 2) return raw as UsageFile
-    return emptyUsageFile()
+    if (raw.version === 2) return [raw as UsageFile, false]
+    return [emptyUsageFile(), false]
   } catch {
-    return emptyUsageFile()
+    return [emptyUsageFile(), false]
   }
 }
 
@@ -103,9 +104,15 @@ function snapshotPeriod(period: PeriodUsage): PeriodSnapshot {
  * cut off nonessential calls.
  */
 class UsageTracker {
-  private data = loadUsageFile()
+  private data: UsageFile
   private saveTimer: ReturnType<typeof setTimeout> | null = null
   private sttStreamStartedAt: number | null = null
+
+  constructor() {
+    const [data, migrated] = loadUsageFile()
+    this.data = data
+    if (migrated) this.scheduleSave()
+  }
 
   private periodsFor(now = new Date()): { daily: PeriodUsage; monthly: PeriodUsage } {
     const dKey = dailyKey(now)

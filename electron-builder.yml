@@ -11,6 +11,15 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+  # @picovoice/porcupine-node (presence/wakeword.ts) resolves its native
+  # .node addon and .pv/.ppn model/keyword files with __dirname-relative
+  # paths that get passed into the native library's own file I/O — that
+  # native code does its own fopen() on the resulting string, which fails
+  # if the path still points inside the (virtual, compressed) asar archive.
+  # Unpacking the whole package tree is the standard fix: Electron's
+  # asar-unpack redirect then makes __dirname resolve to the real files on
+  # disk for every file in this package, not just the .node itself.
+  - '**/node_modules/@picovoice/**'
 win:
   executableName: jarvis
   target:

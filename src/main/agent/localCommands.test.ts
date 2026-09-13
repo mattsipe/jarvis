@@ -8,7 +8,7 @@ import { describe, it, expect, vi } from 'vitest'
 const { resolveAppMock } = vi.hoisted(() => ({ resolveAppMock: vi.fn() }))
 vi.mock('../apps/resolver', () => ({ resolveApp: resolveAppMock }))
 
-const { matchLocalCommand } = await import('./localCommands')
+const { matchLocalCommand, matchEndPhrase } = await import('./localCommands')
 
 describe('agent/localCommands matchLocalCommand', () => {
   it('matches mute/unmute in a few common phrasings', () => {
@@ -57,5 +57,30 @@ describe('agent/localCommands matchLocalCommand', () => {
   it('returns null for ordinary conversational text', () => {
     expect(matchLocalCommand('what is the weather like today')).toBeNull()
     expect(matchLocalCommand('')).toBeNull()
+  })
+})
+
+describe('agent/localCommands matchEndPhrase', () => {
+  it('matches the three specified end phrases exactly', () => {
+    expect(matchEndPhrase("that's all")).toBe(true)
+    expect(matchEndPhrase('go back to sleep')).toBe(true)
+    expect(matchEndPhrase('end conversation')).toBe(true)
+  })
+
+  it('tolerates punctuation, casing, and a short filler prefix', () => {
+    expect(matchEndPhrase("That's all.")).toBe(true)
+    expect(matchEndPhrase('OK, go back to sleep')).toBe(true)
+    expect(matchEndPhrase('Okay Jarvis, end conversation')).toBe(true)
+    expect(matchEndPhrase('jarvis, that\'s all')).toBe(true)
+  })
+
+  it('does not match a sentence that merely contains one of the phrases as a fragment', () => {
+    expect(matchEndPhrase("that's all I wanted to say, can you also open Chrome")).toBe(false)
+    expect(matchEndPhrase('please end conversation mode in the settings')).toBe(false)
+  })
+
+  it('returns false for ordinary conversational text and empty input', () => {
+    expect(matchEndPhrase('what time is it')).toBe(false)
+    expect(matchEndPhrase('')).toBe(false)
   })
 })

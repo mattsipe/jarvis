@@ -1,6 +1,6 @@
 {
   "name": "jarvis",
-  "version": "0.4.0-test.1",
+  "version": "0.5.0-test.1",
   "description": "JARVIS — daily-use voice AI desktop agent",
   "main": "./out/main/index.js",
   "author": "Weston",
@@ -25,6 +25,7 @@
     "@anthropic-ai/sdk": "^0.125.0",
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
+    "@picovoice/porcupine-node": "^4.0.2",
     "dotenv": "^17.4.2",
     "electron-updater": "^6.8.9",
     "three": "^0.181.0",

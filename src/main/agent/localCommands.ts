@@ -72,3 +72,19 @@ export function matchLocalCommand(rawText: string): LocalCommandMatch | null {
 
   return null
 }
+
+/**
+ * "That's all" / "go back to sleep" / "end conversation" — the Presence
+ * phase's spoken way to end a session, checked before anything else so it
+ * costs nothing (no Claude call) and works whether or not wake-word
+ * Presence is actually enabled (it's just a faster way to end than the
+ * hotkey). A short "ok"/"okay"/"jarvis" filler prefix is tolerated since
+ * that's how people actually say it; the three phrases themselves are
+ * matched exactly, not fuzzily, so an unrelated sentence that happens to
+ * contain one of these words never accidentally ends the conversation.
+ */
+export function matchEndPhrase(rawText: string): boolean {
+  const text = normalize(rawText)
+  if (!text) return false
+  return /^(?:ok(?:ay)?[, ]+)?(?:jarvis[, ]+)?(?:that'?s all|go back to sleep|end conversation)$/.test(text)
+}

@@ -1,46 +1,18 @@
 import { ipcMain } from 'electron'
 import { is } from '@electron-toolkit/utils'
-import { setInteractive, getOverlayWindow, toggleCommandCenter, showCommandCenter, showAmbient, broadcast } from './window'
-import { VoiceSession } from './voice/session'
+import { setInteractive, toggleCommandCenter, showCommandCenter, showAmbient, broadcast } from './window'
+import { toggleSession, isSessionActive, endSession, getCurrentSession } from './voice/sessionManager'
 import { runAgentTurn } from './agent/loop'
 import { resolveConfirmation, requestConfirmation } from './tools/confirmation'
 import { getToolActivityHistory } from './tools/activity'
 import { runToolStandalone } from './tools'
 import { getBudgetStatus, setBudgetConfig, type BudgetConfig } from './usage'
+import { presence } from './presence'
 import { contextManager } from './context'
 import { config, getConfigDiagnostics, saveApiKeys } from './config'
 import { checkForUpdates, installUpdateAndRestart, getUpdateState } from './update/updater'
 
-let session: VoiceSession | null = null
-let sessionActive = false
-
-/**
- * Hotkey-driven session control: first press starts a continuous
- * conversation (see VoiceSession — auto-submits per utterance, listening
- * resumes automatically between turns), second press ends it immediately
- * regardless of which phase it's in. Called from main/index.ts's global
- * shortcut handler. The overlay window is only checked for existence —
- * events themselves are broadcast to every live surface (see
- * window.ts's broadcast()), not sent to a specific window.
- */
-export function toggleSession(): void {
-  const win = getOverlayWindow()
-  if (!win) return
-
-  if (!sessionActive) {
-    sessionActive = true
-    session = new VoiceSession(() => {
-      sessionActive = false
-      session = null
-    })
-    broadcast('voice:toggle', { listening: true })
-  } else {
-    session?.endSession()
-    sessionActive = false
-    session = null
-    broadcast('voice:toggle', { listening: false })
-  }
-}
+export { toggleSession } from './voice/sessionManager'
 
 export function registerIpcHandlers(): void {
   ipcMain.on('hud:set-interactive', (_event, interactive: boolean) => {
@@ -53,23 +25,23 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.on('voice:start', (_event, sampleRate: number) => {
-    session?.beginListening(sampleRate)
+    getCurrentSession()?.beginListening(sampleRate)
   })
 
   ipcMain.on('voice:audio-chunk', (_event, chunk: ArrayBuffer) => {
-    session?.pushAudio(Buffer.from(chunk))
+    getCurrentSession()?.pushAudio(Buffer.from(chunk))
   })
 
   // Renderer is the only one who knows when actual audio *playback*
   // (not just TTS generation) has finished — that's the correct moment
   // to resume listening for the next turn.
   ipcMain.on('voice:playback-finished', () => {
-    session?.resumeAfterPlayback()
+    getCurrentSession()?.resumeAfterPlayback()
   })
 
   // Latency telemetry's final mark — see voice/telemetry.ts.
   ipcMain.on('voice:playback-started', () => {
-    session?.notifyPlaybackStarted()
+    getCurrentSession()?.notifyPlaybackStarted()
   })
 
   // Barge-in: renderer's local VAD detected the user talking while JARVIS
@@ -78,7 +50,7 @@ export function registerIpcHandlers(): void {
   ipcMain.on(
     'voice:barge-in',
     (_event, payload: { sampleRate: number; preroll: ArrayBuffer[] }) => {
-      session?.bargeIn(
+      getCurrentSession()?.bargeIn(
         payload.sampleRate,
         payload.preroll.map((buf) => Buffer.from(buf))
       )
@@ -115,11 +87,7 @@ export function registerIpcHandlers(): void {
   ipcMain.on('voice:renderer-error', (_event, payload: { message: string; stage: string }) => {
     console.error(`[jarvis] renderer voice error (${payload.stage}):`, payload.message)
     broadcast('voice:error', payload)
-    if (payload.stage === 'mic' && sessionActive) {
-      session?.endSession()
-      sessionActive = false
-      session = null
-    }
+    if (payload.stage === 'mic' && isSessionActive()) endSession()
   })
 
   // Update flow (see update/updater.ts) — 'check' is both the startup call
@@ -145,7 +113,7 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('context:live', () => contextManager.getLiveContext())
   ipcMain.handle('context:persistent', () => contextManager.getPersistent())
-  // Presence only — never the keys themselves — for the Integrations panel.
+  // Boolean presence only — never the keys themselves — for the Integrations panel.
   ipcMain.handle('config:services-status', () => ({
     anthropic: Boolean(config.anthropicApiKey),
     elevenlabs: Boolean(config.elevenLabsApiKey),
@@ -157,8 +125,39 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('config:diagnostics', () => getConfigDiagnostics())
   ipcMain.handle(
     'config:save-keys',
-    (_event, keys: { anthropic?: string; deepgram?: string; elevenlabs?: string }) => saveApiKeys(keys)
+    (_event, keys: { anthropic?: string; deepgram?: string; elevenlabs?: string; picovoice?: string }) => {
+      const result = saveApiKeys(keys)
+      if (keys.picovoice !== undefined) presence.refreshEngine() // pick up a newly-added key without an app restart
+      return result
+    }
   )
+
+  // Presence / hands-free (see main/presence/) — status for the Command
+  // Center panel and tray, config toggles, the mute hotkey/button, and the
+  // continuous stream of PCM chunks from the renderer's always-on
+  // wake-word mic capture (audio/presenceCapture.ts) — completely separate
+  // from voice:audio-chunk, which only ever carries audio during a real
+  // Deepgram-bound conversation.
+  ipcMain.handle('presence:status', () => presence.status())
+  ipcMain.handle('presence:set-enabled', (_event, enabled: boolean) => {
+    presence.setEnabled(enabled)
+    return presence.status()
+  })
+  ipcMain.handle('presence:set-launch-at-login', (_event, launchAtLogin: boolean) => {
+    presence.setLaunchAtLogin(launchAtLogin)
+    return presence.status()
+  })
+  ipcMain.handle('presence:set-muted', (_event, muted: boolean) => {
+    presence.setMuted(muted)
+    return presence.status()
+  })
+  ipcMain.handle('presence:toggle-muted', () => {
+    presence.toggleMuted()
+    return presence.status()
+  })
+  ipcMain.on('presence:audio-chunk', (_event, chunk: ArrayBuffer) => {
+    presence.ingestAudioChunk(chunk)
+  })
 
   // Command Center's Memory panel — lists/edits/deletes what JARVIS
   // remembers (see context/memory.ts). Same records the remember/

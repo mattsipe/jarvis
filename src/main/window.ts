@@ -7,6 +7,14 @@ let overlayWindow: BrowserWindow | null = null
 let commandCenterWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 
+// Kept as plain strings/booleans (not an import of presence's own status
+// type) so window.ts never needs to import main/presence/ — presence
+// already imports from here (broadcast, showCommandCenter), and importing
+// back would make the two modules circular for no real benefit.
+let trayStatusLabel = 'Presence: starting…'
+let trayMuted = false
+let trayMuteHandler: (() => void) | null = null
+
 /**
  * Which surface is the intended, user-visible one right now. Ambient is an
  * optional presentation mode, not a permanent overlay — see the lifecycle
@@ -217,19 +225,43 @@ export function broadcast(channel: string, payload: unknown): void {
  * A tray icon is the only reliable way to get back to a visible surface
  * (or to actually quit) once both windows are hidden — critical on
  * Windows, which has no dock/menu-bar equivalent for a window-less app.
+ * Also the one place Presence's sleeping/listening/muted state is visible
+ * even when both windows are hidden (the whole point of "launches quietly
+ * in the background") — see setTrayStatus, called from presence/index.ts
+ * on every state change.
  */
 export function createTray(): void {
   const iconPath = join(__dirname, '../../resources/tray-icon-32.png')
   const icon = nativeImage.createFromPath(iconPath)
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon)
-  tray.setToolTip('JARVIS')
+  rebuildTray()
+  tray.on('click', () => showCommandCenter())
+}
+
+/** Registered once from main/index.ts — the tray's Mute/Unmute item calls back into presence.toggleMuted() without window.ts needing to import presence/index.ts. */
+export function setTrayMuteHandler(handler: () => void): void {
+  trayMuteHandler = handler
+}
+
+/** Called from presence/index.ts whenever Presence's state changes, so the tray tooltip/menu stay accurate without any window ever needing to be visible. */
+export function setTrayStatus(label: string, muted: boolean): void {
+  trayStatusLabel = label
+  trayMuted = muted
+  rebuildTray()
+}
+
+function rebuildTray(): void {
+  if (!tray) return
+  tray.setToolTip(`JARVIS — ${trayStatusLabel}`)
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: 'Command Center', click: () => showCommandCenter() },
       { label: 'Ambient Mode', click: () => showAmbient() },
       { type: 'separator' },
+      { label: trayStatusLabel, enabled: false },
+      { label: trayMuted ? 'Unmute' : 'Mute', click: () => trayMuteHandler?.() },
+      { type: 'separator' },
       { label: 'Quit JARVIS', click: () => app.quit() }
     ])
   )
-  tray.on('click', () => showCommandCenter())
 }

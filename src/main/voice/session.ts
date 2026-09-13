@@ -1,7 +1,7 @@
 import { createSttProvider, type SttProvider } from './stt'
 import { ElevenLabsTts } from './tts/elevenlabs'
 import { runAgentTurn, type ToolCallInfo } from '../agent/loop'
-import { matchLocalCommand, type LocalCommandMatch } from '../agent/localCommands'
+import { matchLocalCommand, matchEndPhrase, type LocalCommandMatch } from '../agent/localCommands'
 import { broadcast } from '../window'
 import { TurnTimer } from './telemetry'
 import { usageTracker, budgetManager } from '../usage'
@@ -230,6 +230,15 @@ export class VoiceSession {
       // just cleared their throat) — stay in the session, go back to
       // listening rather than treating it as an empty turn.
       this.send('voice:resume-listening', null)
+      return
+    }
+
+    // "That's all" / "go back to sleep" / "end conversation" — end
+    // immediately, no Claude call at all. Works regardless of whether
+    // Presence/wake-word is actually enabled; it's just the fast voice
+    // path back to hotkey-only idle either way.
+    if (matchEndPhrase(text)) {
+      this.endSession()
       return
     }
 
