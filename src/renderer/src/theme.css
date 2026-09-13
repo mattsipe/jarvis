@@ -4,7 +4,26 @@
   --jarvis-violet: #8b7cff;
   --jarvis-emerald: #3bf0c0;
   --jarvis-amber: #ff6b4a;
+  --jarvis-cyan-emerald: #4fe8d8;
   --jarvis-hairline: rgba(79, 216, 255, 0.25);
+}
+
+@keyframes jarvis-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes jarvis-spin-reverse {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(-360deg);
+  }
 }
 
 * {
