@@ -52,6 +52,19 @@ export function registerIpcHandlers(): void {
     session?.resumeAfterPlayback()
   })
 
+  // Barge-in: renderer's local VAD detected the user talking while JARVIS
+  // was thinking/speaking. `preroll` is the few hundred ms it buffered
+  // while only monitoring, so the interruption's first words aren't lost.
+  ipcMain.on(
+    'voice:barge-in',
+    (_event, payload: { sampleRate: number; preroll: ArrayBuffer[] }) => {
+      session?.bargeIn(
+        payload.sampleRate,
+        payload.preroll.map((buf) => Buffer.from(buf))
+      )
+    }
+  )
+
   // Dev-only: lets automated/manual testing trigger the exact same code path
   // as the real hotkey, without needing OS Accessibility permission to
   // simulate a real keystroke. Never registered in a packaged build — the

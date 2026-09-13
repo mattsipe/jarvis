@@ -30,7 +30,8 @@ export interface AgentTurnResult {
  */
 export async function runAgentTurn(
   userText: string,
-  onSentence: (sentence: string) => void
+  onSentence: (sentence: string) => void,
+  signal?: AbortSignal
 ): Promise<AgentTurnResult> {
   const tier = pickTier(userText)
   const tierConfig = MODEL_TIERS[tier]
@@ -41,14 +42,17 @@ export async function runAgentTurn(
     { role: 'user', content: userText }
   ]
 
-  const stream = client.messages.stream({
-    model: tierConfig.model,
-    max_tokens: MAX_RESPONSE_TOKENS,
-    system: PERSONA_SYSTEM_PROMPT,
-    messages,
-    ...(tierConfig.thinking ? { thinking: { type: 'adaptive' as const } } : {}),
-    ...(tierConfig.effort ? { output_config: { effort: tierConfig.effort } } : {})
-  })
+  const stream = client.messages.stream(
+    {
+      model: tierConfig.model,
+      max_tokens: MAX_RESPONSE_TOKENS,
+      system: PERSONA_SYSTEM_PROMPT,
+      messages,
+      ...(tierConfig.thinking ? { thinking: { type: 'adaptive' as const } } : {}),
+      ...(tierConfig.effort ? { output_config: { effort: tierConfig.effort } } : {})
+    },
+    { signal }
+  )
 
   let fullText = ''
   stream.on('text', (delta) => {
@@ -60,9 +64,14 @@ export async function runAgentTurn(
   const last = chunker.flush()
   if (last) onSentence(last)
 
-  history.push({ role: 'user', content: userText })
-  history.push({ role: 'assistant', content: fullText })
-  while (history.length > MAX_HISTORY_TURNS * 2) history.shift()
+  // Don't let a barge-in-interrupted (or otherwise cut-off) reply pollute
+  // history with a truncated answer — only a turn that ran to completion
+  // becomes part of the conversation's context.
+  if (!signal?.aborted) {
+    history.push({ role: 'user', content: userText })
+    history.push({ role: 'assistant', content: fullText })
+    while (history.length > MAX_HISTORY_TURNS * 2) history.shift()
+  }
 
   return { fullText, tier }
 }

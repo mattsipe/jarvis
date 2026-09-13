@@ -46,7 +46,13 @@ const jarvisAPI = {
   /** Main says it's time to start listening for the next turn. */
   onResumeListening: (cb: () => void) => on('voice:resume-listening', cb),
   /** The whole conversation session ended (hotkey pressed again, or inactivity timeout). */
-  onSessionEnded: (cb: () => void) => on('voice:session-ended', cb)
+  onSessionEnded: (cb: () => void) => on('voice:session-ended', cb),
+
+  // --- Barge-in (M2.5) ---
+  /** Local VAD detected the user talking over JARVIS — cancel the current turn and listen. */
+  notifyBargeIn(sampleRate: number, preroll: ArrayBuffer[]): void {
+    ipcRenderer.send('voice:barge-in', { sampleRate, preroll })
+  }
 }
 
 if (process.contextIsolated) {

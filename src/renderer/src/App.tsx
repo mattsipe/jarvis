@@ -27,62 +27,75 @@ function isHudState(v: string): v is HudState {
  * auto-submits on a pause (Deepgram speechFinal, main-side), listening
  * resumes automatically once JARVIS's reply has actually finished
  * *playing* (not just generating), and the same hotkey ends the session
- * at any point. See main/voice/session.ts for the session state machine.
+ * at any point. The mic is a single instance for the whole session (not
+ * recreated per turn) so it can also just *monitor* for barge-in while
+ * JARVIS is thinking/speaking, without streaming to Deepgram — see
+ * audio/capture.ts's mode switch and main/voice/session.ts's bargeIn().
  */
 export default function App(): React.JSX.Element {
   const micRef = useRef<MicCapture | null>(null)
   const ttsRef = useRef<TtsPlayback | null>(null)
 
   useEffect(() => {
-    function beginListening(): void {
+    function beginListening(mic: MicCapture): void {
       useTranscriptStore.getState().resetForNewTurn()
       useHudStore.getState().setState('listening')
-
-      const mic = new MicCapture()
-      micRef.current = mic
-      mic
-        .start()
-        .then((sampleRate) => {
-          // Guard against the session ending before the mic finished initializing.
-          if (micRef.current !== mic) {
-            mic.stop()
-            return
-          }
-          window.jarvis.startListening(sampleRate)
-          mic.beginStreaming()
-        })
-        .catch((err) => {
-          console.error('[jarvis] microphone capture failed:', err)
-          useHudStore.getState().setState('error')
-          micRef.current = null
-        })
+      mic.setMode('stream')
+      window.jarvis.startListening(mic.sampleRate)
     }
 
-    function stopMic(): void {
+    function handleBargeIn(preroll: ArrayBuffer[]): void {
+      const mic = micRef.current
+      if (!mic) return
+      ttsRef.current?.abort()
+      beginListening(mic)
+      window.jarvis.notifyBargeIn(mic.sampleRate, preroll)
+    }
+
+    function teardown(): void {
       micRef.current?.stop()
       micRef.current = null
+      ttsRef.current?.close()
+      ttsRef.current = null
     }
 
     const unsubscribers = [
-      // Session start/end (hotkey) — NOT per-turn anymore, see session.ts.
+      // Session start/end (hotkey) — not per-turn, see session.ts.
       window.jarvis.onToggleListening(({ listening }) => {
-        if (listening) {
-          beginListening()
-        } else {
-          stopMic()
+        if (!listening) {
+          teardown()
+          return
         }
+
+        const mic = new MicCapture()
+        micRef.current = mic
+        mic
+          .start()
+          .then(() => {
+            if (micRef.current !== mic) {
+              mic.stop() // session ended before the mic finished initializing
+              return
+            }
+            mic.setBargeInHandler(handleBargeIn)
+            mic.beginStreaming()
+            beginListening(mic)
+          })
+          .catch((err) => {
+            console.error('[jarvis] microphone capture failed:', err)
+            useHudStore.getState().setState('error')
+            micRef.current = null
+          })
       }),
 
       // Main resumed the session for the next turn (previous reply finished
-      // playing, or the user paused without saying anything).
+      // playing, or the user paused without saying anything). Same mic
+      // instance throughout — just flip it back to full streaming.
       window.jarvis.onResumeListening(() => {
-        beginListening()
+        if (micRef.current) beginListening(micRef.current)
       }),
 
       window.jarvis.onSessionEnded(() => {
-        stopMic()
-        ttsRef.current?.close()
-        ttsRef.current = null
+        teardown()
       }),
 
       window.jarvis.onTranscript(({ text, isFinal }) => {
@@ -96,7 +109,9 @@ export default function App(): React.JSX.Element {
       window.jarvis.onHudState((state) => {
         if (!isHudState(state)) return
         if (state === 'thinking') {
-          stopMic() // don't let the mic pick up JARVIS's own reply
+          // Don't stop the mic — just stop streaming it, so barge-in can
+          // still watch for the user talking over JARVIS.
+          micRef.current?.setMode('monitor')
           if (!ttsRef.current) ttsRef.current = new TtsPlayback()
         }
         useHudStore.getState().setState(state)
@@ -127,8 +142,7 @@ export default function App(): React.JSX.Element {
 
     return () => {
       unsubscribers.forEach((unsub) => unsub())
-      micRef.current?.stop()
-      ttsRef.current?.close()
+      teardown()
     }
   }, [])
 

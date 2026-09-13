@@ -10,6 +10,8 @@ import { SttProvider } from './types'
 export class DeepgramStt extends SttProvider {
   private ws: WebSocket | null = null
   private closing = false
+  private ready = false
+  private queue: Buffer[] = []
 
   start(sampleRate: number): void {
     const params = new URLSearchParams({
@@ -24,12 +26,19 @@ export class DeepgramStt extends SttProvider {
       channels: '1'
     })
     this.closing = false
+    this.ready = false
+    this.queue = []
     this.ws = new WebSocket(`wss://api.deepgram.com/v1/listen?${params.toString()}`, {
       headers: { Authorization: `Token ${config.deepgramApiKey}` }
     })
 
     this.ws.on('open', () => {
-      // no-op — ready to receive audio
+      this.ready = true
+      // Flush anything captured while the handshake was still in flight —
+      // otherwise the first ~100-300ms of the utterance (or a barge-in's
+      // pre-roll buffer, see MicCapture) is silently dropped.
+      for (const chunk of this.queue) this.ws?.send(chunk)
+      this.queue = []
     })
 
     this.ws.on('message', (data: WebSocket.RawData) => {
@@ -58,15 +67,22 @@ export class DeepgramStt extends SttProvider {
     })
   }
 
+  private static readonly MAX_QUEUED_CHUNKS = 50 // ~4s of audio at 80ms/chunk — a connection that never opens shouldn't leak memory
+
   sendAudio(chunk: Buffer): void {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    if (this.closing) return
+    if (this.ready && this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(chunk)
+    } else {
+      this.queue.push(chunk)
+      if (this.queue.length > DeepgramStt.MAX_QUEUED_CHUNKS) this.queue.shift()
     }
   }
 
   stop(): void {
     if (this.closing || !this.ws) return
     this.closing = true
+    this.queue = []
     if (this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: 'CloseStream' }))
       // Give Deepgram a moment to flush the final transcript before we close.

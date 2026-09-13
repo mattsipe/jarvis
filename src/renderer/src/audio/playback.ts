@@ -11,8 +11,9 @@ export class TtsPlayback {
   private analyser: AnalyserNode
   private dataArray: Uint8Array<ArrayBuffer>
   private nextStartTime: number
-  private pendingSources = 0
+  private activeSources = new Set<AudioBufferSourceNode>()
   private streamEnded = false
+  private aborted = false
   private rafId: number | null = null
   private finishedCallback: (() => void) | null = null
 
@@ -31,6 +32,7 @@ export class TtsPlayback {
   }
 
   enqueue(chunk: ArrayBuffer): void {
+    if (this.aborted) return
     const int16 = new Int16Array(chunk)
     if (int16.length === 0) return
     const float32 = new Float32Array(int16.length)
@@ -47,9 +49,9 @@ export class TtsPlayback {
     source.start(startAt)
     this.nextStartTime = startAt + buffer.duration
 
-    this.pendingSources++
+    this.activeSources.add(source)
     source.onended = () => {
-      this.pendingSources--
+      this.activeSources.delete(source)
       this.checkFinished()
     }
 
@@ -63,6 +65,32 @@ export class TtsPlayback {
     this.checkFinished()
   }
 
+  /**
+   * Barge-in: immediately silences whatever is playing/queued and
+   * prevents markStreamEnded's callback from firing for this (now
+   * superseded) reply. Stopping an AudioBufferSourceNode mid-playback is
+   * synchronous and near-instant — this is what makes the cutoff feel
+   * immediate rather than waiting for the current chunk to finish.
+   */
+  abort(): void {
+    this.aborted = true
+    this.finishedCallback = null
+    for (const source of this.activeSources) {
+      source.onended = null
+      try {
+        source.stop()
+      } catch {
+        // Already stopped/ended — fine, that's the state we want anyway.
+      }
+    }
+    this.activeSources.clear()
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId)
+      this.rafId = null
+    }
+    setAmplitude(null)
+  }
+
   close(): void {
     if (this.rafId !== null) cancelAnimationFrame(this.rafId)
     this.ctx.close()
@@ -70,7 +98,7 @@ export class TtsPlayback {
   }
 
   private checkFinished(): void {
-    if (this.pendingSources === 0 && this.streamEnded) {
+    if (this.activeSources.size === 0 && this.streamEnded && !this.aborted) {
       this.finishedCallback?.()
     }
   }
@@ -87,7 +115,7 @@ export class TtsPlayback {
       const rms = Math.sqrt(sumSquares / this.dataArray.length)
       setAmplitude(Math.min(1, rms * 4))
 
-      if (this.pendingSources > 0 || !this.streamEnded) {
+      if (this.activeSources.size > 0 || !this.streamEnded) {
         this.rafId = requestAnimationFrame(tick)
       } else {
         this.rafId = null
