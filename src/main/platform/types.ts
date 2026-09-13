@@ -1,8 +1,22 @@
+export interface ToolDiagnostics {
+  /** Which platform adapter actually ran this — filled in by ToolRegistry.execute, not the adapter itself. */
+  adapter?: 'darwin' | 'win32'
+  startedAt?: number
+  endedAt?: number
+  durationMs?: number
+  /** Underlying process exit code, when the failure came from spawning an external command. */
+  exitCode?: number | null
+  /** Captured stderr (or the closest equivalent), truncated — never secret material, just OS/PowerShell error text. */
+  stderr?: string
+}
+
 export interface ToolResult {
   ok: boolean
   /** Short, speakable-ish summary — this is what Claude sees as the tool_result content. */
   message: string
   data?: Record<string, unknown>
+  /** Never secret — see ToolDiagnostics. Powers Command Center's Recent Actions detail and the jarvis.log entry. */
+  diagnostics?: ToolDiagnostics
 }
 
 export interface SystemStatusInfo {
@@ -36,6 +50,8 @@ export interface PlatformControl {
   findApp(query: string): Promise<ToolResult>
   launchSteamGame(nameOrAppId: string): Promise<ToolResult>
   focusWindow(appName: string): Promise<ToolResult>
+  /** Runs a battery of adapter-specific capability checks with no user-visible side effect — see the Command Center's "Run Self-Test". */
+  selfTest(): Promise<ToolResult>
 }
 
 export class UnsupportedFeatureError extends Error {}

@@ -97,6 +97,8 @@ const jarvisAPI = {
     on('tool:confirm-resolved', cb),
   onToolActivity: (cb: (payload: Record<string, unknown>) => void) => on('tool:activity', cb),
   getToolActivityHistory: (): Promise<unknown[]> => ipcRenderer.invoke('tool:activity-history'),
+  /** Runs the platform self-test without requiring voice — see main/ipc.ts's 'system:self-test'. */
+  runSelfTest: (): Promise<unknown> => ipcRenderer.invoke('system:self-test'),
 
   // --- Diagnostics / context (Command Center panels) ---
   getUsageSnapshot: (): Promise<unknown> => ipcRenderer.invoke('usage:snapshot'),

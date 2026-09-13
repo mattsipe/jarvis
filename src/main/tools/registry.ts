@@ -3,6 +3,7 @@ import { zodToJsonSchema } from 'zod-to-json-schema'
 import type Anthropic from '@anthropic-ai/sdk'
 import type { PlatformControl, ToolResult } from '../platform/types'
 import type { ContextManager } from '../context'
+import { logInfo, logError } from '../logger'
 
 export type { ToolResult } from '../platform/types'
 
@@ -62,7 +63,17 @@ class ToolRegistry {
     })
   }
 
-  /** Validates raw (Claude-supplied) input against the tool's zod schema before running it. */
+  /**
+   * Validates raw (Claude-supplied) input against the tool's zod schema
+   * before running it. Also the single choke point every tool call passes
+   * through (voice-driven, dev-test, and the standalone self-test path
+   * alike), so this is where tool-call diagnostics — adapter, timing,
+   * exit code/stderr when the adapter provided any — get attached and
+   * persisted to jarvis.log, per the "detailed tool diagnostics"
+   * requirement. Never logs tool *arguments* beyond what's already
+   * harmless (app names, volume percentages, URLs — no secrets ever flow
+   * through tool input).
+   */
   async execute(name: string, rawInput: unknown, ctx: ToolContext): Promise<ToolResult> {
     const tool = this.get(name)
     if (!tool) return { ok: false, message: `Unknown tool: ${name}.` }
@@ -70,11 +81,30 @@ class ToolRegistry {
     if (!parsed.success) {
       return { ok: false, message: `Invalid input for ${name}: ${parsed.error.issues.map((i) => i.message).join('; ')}` }
     }
+
+    const startedAt = Date.now()
+    let result: ToolResult
     try {
-      return await tool.run(parsed.data, ctx)
+      result = await tool.run(parsed.data, ctx)
     } catch (err) {
-      return { ok: false, message: err instanceof Error ? err.message : String(err) }
+      result = { ok: false, message: err instanceof Error ? err.message : String(err) }
     }
+    const endedAt = Date.now()
+
+    const merged: ToolResult = {
+      ...result,
+      diagnostics: { adapter: ctx.platform.name, startedAt, endedAt, durationMs: endedAt - startedAt, ...result.diagnostics }
+    }
+
+    const log = merged.ok ? logInfo : logError
+    const exitPart = merged.diagnostics?.exitCode != null ? ` [exit ${merged.diagnostics.exitCode}]` : ''
+    const stderrPart = merged.diagnostics?.stderr ? ` stderr="${merged.diagnostics.stderr.slice(0, 200)}"` : ''
+    log(
+      'tool',
+      `${name}(${JSON.stringify(parsed.data)}) via ${ctx.platform.name} — ${merged.ok ? 'ok' : 'FAILED'} in ${merged.diagnostics!.durationMs}ms: ${merged.message}${exitPart}${stderrPart}`
+    )
+
+    return merged
   }
 }
 

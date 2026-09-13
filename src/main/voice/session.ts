@@ -318,7 +318,8 @@ export class VoiceSession {
             input: call.input,
             status: toolResult.ok ? 'success' : call.risk === 'elevated' && !toolResult.ok ? 'denied' : 'error',
             message: toolResult.message,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            diagnostics: toolResult.diagnostics
           })
         },
         requestConfirmation: (call) => this.requestToolConfirmation(call)

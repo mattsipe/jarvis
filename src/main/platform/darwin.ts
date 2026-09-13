@@ -168,4 +168,30 @@ export class DarwinPlatformControl implements PlatformControl {
       return { ok: false, message: `Couldn't switch to ${appName}: ${(err as Error).message}` }
     }
   }
+
+  /** Dev-parity counterpart to the Windows self-test — same interface, much smaller check list since this isn't the production adapter. */
+  async selfTest(): Promise<ToolResult> {
+    const checks: Array<{ name: string; ok: boolean; message: string }> = []
+    try {
+      await osascript('return 1')
+      checks.push({ name: 'osascript-invocation', ok: true, message: 'ok' })
+    } catch (err) {
+      checks.push({ name: 'osascript-invocation', ok: false, message: (err as Error).message })
+    }
+    try {
+      await execFileAsync('which', ['screencapture'])
+      checks.push({ name: 'screencapture-binary', ok: true, message: 'found' })
+    } catch (err) {
+      checks.push({ name: 'screencapture-binary', ok: false, message: (err as Error).message })
+    }
+    const failed = checks.filter((c) => !c.ok)
+    return {
+      ok: failed.length === 0,
+      message:
+        failed.length === 0
+          ? `All ${checks.length} macOS self-tests passed.`
+          : `${failed.length} of ${checks.length} macOS self-tests failed.`,
+      data: { checks }
+    }
+  }
 }

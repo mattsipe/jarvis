@@ -5,6 +5,7 @@ import { VoiceSession } from './voice/session'
 import { runAgentTurn } from './agent/loop'
 import { resolveConfirmation, requestConfirmation } from './tools/confirmation'
 import { getToolActivityHistory } from './tools/activity'
+import { runToolStandalone } from './tools'
 import { usage } from './voice/usage'
 import { contextManager } from './context'
 import { config, getConfigDiagnostics, saveApiKeys } from './config'
@@ -131,6 +132,8 @@ export function registerIpcHandlers(): void {
   // One-shot queries the Command Center makes on open, rather than
   // waiting for the next broadcast of each.
   ipcMain.handle('tool:activity-history', () => getToolActivityHistory())
+  // Command Center's "Run Self-Test" button — exercises platform capabilities without requiring voice. See platform/windows.ts's selfTest().
+  ipcMain.handle('system:self-test', () => runToolStandalone('self_test'))
   ipcMain.handle('usage:snapshot', () => usage.snapshot())
   ipcMain.handle('context:live', () => contextManager.getLiveContext())
   ipcMain.handle('context:persistent', () => contextManager.getPersistent())

@@ -64,3 +64,12 @@ export const screenshotTool: JarvisTool = {
   input: z.object({}),
   run: (_input, ctx) => ctx.platform.screenshot()
 }
+
+export const selfTestTool: JarvisTool = {
+  name: 'self_test',
+  description:
+    'Run a built-in diagnostic self-test of this platform (PowerShell invocation, app enumeration, audio control, screenshot capability) with no lasting side effect. Use this to check whether desktop-control actions are working, without actually opening/changing anything for the user.',
+  risk: 'safe',
+  input: z.object({}),
+  run: (_input, ctx) => ctx.platform.selfTest()
+}

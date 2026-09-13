@@ -8,6 +8,13 @@ export interface PendingConfirmation {
   description: string
 }
 
+export interface ToolDiagnostics {
+  adapter?: 'darwin' | 'win32'
+  durationMs?: number
+  exitCode?: number | null
+  stderr?: string
+}
+
 export interface ToolActivityEntry {
   id: string
   name: string
@@ -16,6 +23,7 @@ export interface ToolActivityEntry {
   status: 'started' | 'confirm-pending' | 'success' | 'error' | 'denied'
   message?: string
   timestamp: string
+  diagnostics?: ToolDiagnostics
 }
 
 interface ToolStoreState {

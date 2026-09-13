@@ -1,5 +1,6 @@
 import { broadcast } from '../window'
 import type { RiskLevel } from './registry'
+import type { ToolDiagnostics } from '../platform/types'
 
 export interface ToolActivityEntry {
   id: string
@@ -9,6 +10,8 @@ export interface ToolActivityEntry {
   status: 'started' | 'confirm-pending' | 'success' | 'error' | 'denied'
   message?: string
   timestamp: string
+  /** Adapter/timing/exit-code detail from ToolRegistry.execute — never secret values. Powers Command Center's Recent Actions detail view. */
+  diagnostics?: ToolDiagnostics
 }
 
 const HISTORY_LIMIT = 20
