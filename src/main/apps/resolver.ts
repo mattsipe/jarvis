@@ -12,8 +12,33 @@ export interface AmbiguousApps {
 
 export type AppResolution = ResolvedApp | AmbiguousApps | null
 
-/** Penalize obvious wrong-variant matches (uninstallers, "classic" editions, VR spinoffs, etc.) unless the query itself asked for them. */
-const NEGATIVE_TOKENS = ['classic', 'uninstall', 'help', 'readme', 'setup', 'update', 'vr', 'server', 'launcher', 'beta']
+/**
+ * Penalize obvious wrong-variant matches unless the query itself asked
+ * for them — e.g. "Steam" should never tie with "SteamVR", "Steam
+ * Support", "Steam Client Bootstrapper", or an uninstaller entry.
+ */
+const NEGATIVE_TOKENS = [
+  'classic',
+  'uninstall',
+  'help',
+  'readme',
+  'setup',
+  'update',
+  'updater',
+  'vr',
+  'server',
+  'launcher',
+  'beta',
+  'support',
+  'tools',
+  'config',
+  'configuration',
+  'service',
+  'webhelper',
+  'bootstrapper',
+  'crash',
+  'controller'
+]
 
 const AMBIGUITY_MARGIN = 15
 

@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
@@ -10,16 +11,25 @@ namespace JarvisHelper;
 /// Steam's own registry key and library-folder manifests directly. Steam's
 /// VDF format is simple enough that a "quoted-key" "quoted-value" regex
 /// covers what's needed here; a full VDF parser would be overkill.
+///
+/// Client resolution deliberately doesn't trust the registry blindly:
+/// HKCU\...\Steam is only populated once Steam has actually run for that
+/// user (a fresh install/profile can be missing it, or it can point at a
+/// stale/moved path), so every candidate is verified with File.Exists
+/// before being accepted, with standard install locations as a further
+/// fallback. Confirmed against a real install: SteamPath's steam.exe
+/// existing at C:\Program Files (x86)\Steam\steam.exe.
 /// </summary>
 internal static class SteamCatalog
 {
     internal static JsonObject Get()
     {
-        var steamPath = ReadSteamPath();
+        var steamExePath = ResolveSteamExe();
         var games = new JsonArray();
-        if (steamPath != null)
+        if (steamExePath != null)
         {
-            foreach (var libraryPath in ReadLibraryFolders(steamPath))
+            var steamDir = Path.GetDirectoryName(steamExePath)!;
+            foreach (var libraryPath in ReadLibraryFolders(steamDir))
             {
                 var appsDir = Path.Combine(libraryPath, "steamapps");
                 if (!Directory.Exists(appsDir)) continue;
@@ -32,23 +42,67 @@ internal static class SteamCatalog
         }
         return new JsonObject
         {
-            ["steamExePath"] = steamPath != null ? Path.Combine(steamPath, "steam.exe") : null,
+            ["steamExePath"] = steamExePath,
             ["games"] = games
         };
     }
 
-    private static string? ReadSteamPath()
+    /// <summary>
+    /// In priority order: HKCU SteamExe (a full path Steam itself writes,
+    /// when present) and SteamPath+steam.exe; then HKLM's 32-bit-view
+    /// InstallPath (set at install time, independent of any user profile);
+    /// then the two standard install directories. The first candidate that
+    /// actually exists on disk wins — never returns an unverified path.
+    /// </summary>
+    private static string? ResolveSteamExe()
     {
+        foreach (var candidate in RegistryCandidates().Concat(StandardLocations()))
+        {
+            if (File.Exists(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    private static List<string> RegistryCandidates()
+    {
+        var results = new List<string>();
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam");
-            return key?.GetValue("SteamPath") as string;
+            if (key != null)
+            {
+                if (key.GetValue("SteamExe") is string exe && !string.IsNullOrWhiteSpace(exe))
+                    results.Add(exe.Replace('/', '\\'));
+                if (key.GetValue("SteamPath") is string path && !string.IsNullOrWhiteSpace(path))
+                    results.Add(Path.Combine(path.Replace('/', '\\'), "steam.exe"));
+            }
         }
         catch
         {
-            return null;
+            // Best-effort — fall through to the next candidate source.
         }
+
+        try
+        {
+            using var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry32);
+            using var key = hklm.OpenSubKey(@"SOFTWARE\Valve\Steam");
+            if (key?.GetValue("InstallPath") is string installPath && !string.IsNullOrWhiteSpace(installPath))
+                results.Add(Path.Combine(installPath, "steam.exe"));
+        }
+        catch
+        {
+            // Best-effort — fall through to the standard-location fallback.
+        }
+
+        return results;
     }
+
+    private static List<string> StandardLocations() =>
+        new()
+        {
+            @"C:\Program Files (x86)\Steam\steam.exe",
+            @"C:\Program Files\Steam\steam.exe"
+        };
 
     private static List<string> ReadLibraryFolders(string steamPath)
     {

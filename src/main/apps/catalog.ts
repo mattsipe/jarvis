@@ -50,7 +50,19 @@ export async function refreshCatalog(): Promise<void> {
   if (process.platform === 'win32') {
     try {
       const steam = await jarvisHelper.steamCatalog()
-      if (steam.steamExePath) entries.push({ displayName: 'Steam', kind: 'exe', launchTarget: steam.steamExePath })
+      if (steam.steamExePath) {
+        // The helper only ever returns a verified (File.Exists-checked)
+        // path — see SteamCatalog.cs's ResolveSteamExe(). Treat it as
+        // authoritative for the name "Steam": drop any Start-Menu-sourced
+        // entry that would otherwise tie with it in the resolver (a
+        // shortcut literally named "Steam", possibly pointing at a
+        // bootstrapper or a stale path) so "open Steam" never has to
+        // guess between two entries that both claim to be the client.
+        for (let i = entries.length - 1; i >= 0; i--) {
+          if (entries[i].displayName.trim().toLowerCase() === 'steam') entries.splice(i, 1)
+        }
+        entries.push({ displayName: 'Steam', kind: 'exe', launchTarget: steam.steamExePath })
+      }
       for (const game of steam.games) {
         entries.push({ displayName: game.name, kind: 'steam-game', launchTarget: game.appId, appId: game.appId })
       }
