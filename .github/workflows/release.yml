@@ -89,6 +89,13 @@ jobs:
       # channel metadata file (test.yml / latest.yml) that electron-updater
       # needs to find and verify updates — a manually-uploaded release asset
       # (the previous process) has no update metadata at all.
+      #
+      # electron-builder.yml's afterPack hook runs scripts/verify-packaged-
+      # app.mjs before this can ever reach the publish/upload step;
+      # REQUIRE_JARVIS_HELPER=1 makes that check treat a missing
+      # jarvis-helper.exe as a hard failure here (as opposed to a warning
+      # for local dev builds, which usually lack the .NET toolchain).
       - run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUIRE_JARVIS_HELPER: '1'

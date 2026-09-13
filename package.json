@@ -1,6 +1,6 @@
 {
   "name": "jarvis",
-  "version": "0.6.3-test.1",
+  "version": "0.6.4-test.1",
   "description": "JARVIS — daily-use voice AI desktop agent",
   "main": "./out/main/index.js",
   "author": "Weston",
@@ -38,6 +38,7 @@
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",
     "@electron-toolkit/eslint-config-ts": "^3.1.0",
     "@electron-toolkit/tsconfig": "^2.0.0",
+    "@electron/asar": "^3.4.1",
     "@types/node": "^22.19.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",

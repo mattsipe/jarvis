@@ -2,6 +2,14 @@ appId: com.weston.jarvis
 productName: JARVIS
 directories:
   buildResources: build
+# Regression check for the v0.6.3-test.1 class of bug (a packaging-config
+# change silently deleted a runtime dependency's files, but nothing failed
+# until the packaged app actually tried to start on a real PC) — runs
+# scripts/verify-packaged-app.mjs against the just-packaged app on EVERY
+# build, aborting before signing/installer-creation/publish if any
+# production dependency or required extraResources file can't be found.
+# See that script for exactly what it checks and why.
+afterPack: scripts/after-pack-verify.cjs
 # A serious pre-existing packaging bug, found and confirmed by directly
 # inspecting a shipped release's actual app.asar (not assumed): every
 # release since jarvis-helper.exe was added had been shipping the FULL
@@ -28,19 +36,22 @@ files:
   - resources/tray-icon-16.png
   - resources/tray-icon-32.png
   - resources/tray-icon-48.png
-  # Belt-and-suspenders on top of the allowlist above: a local rebuild
-  # after switching to the allowlist still showed a handful of src/
-  # entries (and a few tiny native/ ones) inside app.asar despite neither
-  # being named in the allowlist — electron-builder's exact matching
-  # behavior here didn't fully match its own documented semantics, so
-  # these explicit negations stay as a second, independent line of
-  # defense. Harmless either way: src/ is public source already on
-  # GitHub, not a security concern like .git/ was — this is about keeping
-  # the package lean, not fixing a second leak of sensitive content.
-  - '!**/.git/**'
-  - '!**/dist/**'
-  - '!**/native/**'
-  - '!**/src/**'
+  # NOTE: a prior version of this file also added `!**/dist/**` (and
+  # similar) negations here as "belt and suspenders" against a few small,
+  # harmless residual entries (our own src/, a couple of native/ files)
+  # that showed up despite this allowlist. That caused a real startup
+  # crash: a leading `**/` matches "dist" ANYWHERE in the tree, including
+  # node_modules/onnxruntime-node/dist/ — that package's own compiled
+  # output, not a build-artifact directory at all — silently deleting the
+  # exact file (dist/index.js) our own code requires at runtime. Confirmed
+  # by extracting a locally-packaged app.asar and requiring
+  # 'onnxruntime-node' from it directly with plain Node: "Cannot find
+  # module .../onnxruntime-node/dist/index.js". The allowlist above is
+  # sufficient on its own for the real risk (.git/, the project's own
+  # dist/, native/'s dotnet build output, src/ are all simply never
+  # listed, so nothing needs excluding) — do not add directory-name
+  # negations back without checking whether that same name is also a
+  # legitimate folder inside some dependency's own package structure.
 extraResources:
   # presence/wakeword.ts's local openWakeWord engine — see that file's
   # resourcePath(). Every platform needs these (mac for dev/testing too,
