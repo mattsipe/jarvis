@@ -2,43 +2,45 @@ appId: com.weston.jarvis
 productName: JARVIS
 directories:
   buildResources: build
+# A serious pre-existing packaging bug, found and confirmed by directly
+# inspecting a shipped release's actual app.asar (not assumed): every
+# release since jarvis-helper.exe was added had been shipping the FULL
+# .git history (CI's checkout includes .git/, and nothing excluded it — a
+# real concern beyond just size, since git history can carry things a
+# later commit removed) and a complete self-referential duplicate of
+# electron-builder's own output directory, including a second full copy of
+# electron.exe (~200MB) — dist/ wasn't excluded, so electron-builder's
+# in-progress build output was getting swept into the very app.asar it was
+# building, in the same run. Negation-only `files` patterns (this file's
+# original approach) proved unreliable for this project even with a
+# leading `**/` (confirmed against an actual CI-built release: native/ kept
+# leaking ~113MB of intermediate dotnet-publish output despite an explicit
+# `!**/native/**` exclusion) — switched to the opposite, unambiguous
+# approach instead: an explicit allowlist of exactly what the packaged app
+# needs. node_modules/**/* and package.json are still added automatically
+# by electron-builder regardless of this list (confirmed in its own docs)
+# — everything else not named below (src/, native/, .git/, dist/,
+# resources/wakeword/, config/lint/doc files) is simply never part of the
+# app to begin with, with nothing left to "exclude" and no glob-matching
+# subtlety to get wrong again.
 files:
-  # A serious pre-existing packaging bug, found and confirmed by directly
-  # inspecting a shipped release's actual app.asar (not assumed): every
-  # release since jarvis-helper.exe was added has been shipping the FULL
-  # .git history (CI's checkout includes .git/, and nothing excluded it —
-  # a real concern beyond just size, since git history can carry things a
-  # later commit removed) and a complete self-referential duplicate of
-  # electron-builder's own output directory, including a second full copy
-  # of electron.exe (~200MB) — dist/ isn't excluded, so electron-builder's
-  # in-progress build output was getting swept into the very app.asar it
-  # was building, in the same run. A shallow `dir/*` pattern (as this file
-  # used for src/ and briefly for native/) does NOT recurse into
-  # subdirectories in electron-builder's matcher — confirmed by testing —
-  # so every directory exclusion below uses a leading `**/` and a
-  # trailing `/**`, the pattern documented (and needed here, verified by
-  # re-inspecting the actual packaged output) to reliably match regardless
-  # of nesting depth.
+  - out/**/*
+  - resources/tray-icon-16.png
+  - resources/tray-icon-32.png
+  - resources/tray-icon-48.png
+  # Belt-and-suspenders on top of the allowlist above: a local rebuild
+  # after switching to the allowlist still showed a handful of src/
+  # entries (and a few tiny native/ ones) inside app.asar despite neither
+  # being named in the allowlist — electron-builder's exact matching
+  # behavior here didn't fully match its own documented semantics, so
+  # these explicit negations stay as a second, independent line of
+  # defense. Harmless either way: src/ is public source already on
+  # GitHub, not a security concern like .git/ was — this is about keeping
+  # the package lean, not fixing a second leak of sensitive content.
   - '!**/.git/**'
   - '!**/dist/**'
-  - '!**/.vscode/**'
-  - '!**/src/**'
-  - '!electron.vite.config.{js,ts,mjs,cjs}'
-  - '!{.eslintignore,.eslintrc.cjs,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
-  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
-  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
-  # native/jarvis-helper/bin's intermediate dotnet-publish output (dozens
-  # of .NET framework DLLs) — only the final jarvis-helper.exe belongs,
-  # placed separately below via extraResources (which reads straight from
-  # that source path, independent of this `files` selection).
   - '!**/native/**'
-  # Placed via extraResources below instead — a real file outside the asar
-  # archive, like jarvis-helper.exe, rather than inside it (see that
-  # extraResources entry's comment for why: the ONNX runtime's native
-  # addon does its own file I/O on whatever path resourcePath() computes,
-  # which fails if it's still an asar-virtual path — confirmed by an
-  # actual packaged smoke test, not assumed).
-  - '!**/resources/wakeword/**'
+  - '!**/src/**'
 extraResources:
   # presence/wakeword.ts's local openWakeWord engine — see that file's
   # resourcePath(). Every platform needs these (mac for dev/testing too,
