@@ -8,6 +8,7 @@ import { getToolActivityHistory } from './tools/activity'
 import { usage } from './voice/usage'
 import { contextManager } from './context'
 import { config } from './config'
+import { checkForUpdates, installUpdateAndRestart, getUpdateState } from './update/updater'
 
 let session: VoiceSession | null = null
 let sessionActive = false
@@ -119,6 +120,13 @@ export function registerIpcHandlers(): void {
       session = null
     }
   })
+
+  // Update flow (see update/updater.ts) — 'check' is both the startup call
+  // and the Command Center's "Check for Updates" button; 'install' only
+  // ever fires from the user's explicit "Restart JARVIS?" confirmation.
+  ipcMain.on('update:check', () => checkForUpdates())
+  ipcMain.on('update:install', () => installUpdateAndRestart())
+  ipcMain.handle('update:state', () => getUpdateState())
 
   // One-shot queries the Command Center makes on open, rather than
   // waiting for the next broadcast of each.

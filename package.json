@@ -1,6 +1,6 @@
 {
   "name": "jarvis",
-  "version": "0.1.0",
+  "version": "0.2.0-test.1",
   "description": "JARVIS — daily-use voice AI desktop agent",
   "main": "./out/main/index.js",
   "author": "Weston",
@@ -26,6 +26,7 @@
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "dotenv": "^17.4.2",
+    "electron-updater": "^6.8.9",
     "three": "^0.181.0",
     "ws": "^8.21.3",
     "zod": "^3.25.0",

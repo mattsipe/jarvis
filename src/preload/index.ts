@@ -106,7 +106,17 @@ const jarvisAPI = {
     ipcRenderer.invoke('config:services-status'),
 
   /** Dev-only — see ipc.ts's 'dev:test-agent-turn'. Not registered in production; rejects there. */
-  devTestAgentTurn: (text: string): Promise<unknown> => ipcRenderer.invoke('dev:test-agent-turn', text)
+  devTestAgentTurn: (text: string): Promise<unknown> => ipcRenderer.invoke('dev:test-agent-turn', text),
+
+  // --- Auto-update (GitHub Releases via electron-updater) ---
+  checkForUpdates(): void {
+    ipcRenderer.send('update:check')
+  },
+  installUpdate(): void {
+    ipcRenderer.send('update:install')
+  },
+  getUpdateState: (): Promise<unknown> => ipcRenderer.invoke('update:state'),
+  onUpdateState: (cb: (state: Record<string, unknown>) => void) => on('update:state', cb)
 }
 
 if (process.contextIsolated) {

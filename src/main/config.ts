@@ -55,7 +55,9 @@ export const config = {
     ? parseInt(process.env.JARVIS_MAX_SESSION_MINUTES, 10)
     : 10,
   /** Optional dev safety valve: stop synthesizing (but keep showing text) past this many characters in one session. Unset = no cap. */
-  ttsDevCharCap: process.env.TTS_DEV_CHAR_CAP ? parseInt(process.env.TTS_DEV_CHAR_CAP, 10) : undefined
+  ttsDevCharCap: process.env.TTS_DEV_CHAR_CAP ? parseInt(process.env.TTS_DEV_CHAR_CAP, 10) : undefined,
+  /** 'test' allows prerelease versions (e.g. "0.2.0-test.1"); 'stable' only installs plain-semver releases. See update/updater.ts. */
+  updateChannel: (process.env.JARVIS_UPDATE_CHANNEL as 'test' | 'stable') || 'test'
 }
 
 export function assertVoiceLoopConfigured(): void {

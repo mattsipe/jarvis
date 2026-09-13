@@ -22,6 +22,19 @@ nsis:
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
+  # Explicit (matches electron-builder's own default) — user data in
+  # %APPDATA%\jarvis (.env, ContextManager store, usage/telemetry) must
+  # survive a normal uninstall unless the user chooses otherwise. Nothing
+  # here deletes it; a full wipe is a manual, separate step by design.
+  deleteAppDataOnUninstall: false
+publish:
+  - provider: github
+    owner: mattsipe
+    repo: jarvis
+    # electron-updater reads the update-channel file that matches the
+    # running app's own version prerelease tag (e.g. "0.2.0-test.1" ->
+    # "test.yml"). Publishing plain "1.0.0"-style versions later switches
+    # the channel to "latest" automatically — see src/main/update/updater.ts.
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:

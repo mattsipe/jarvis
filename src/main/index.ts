@@ -4,6 +4,7 @@ import { config, assertVoiceLoopConfigured } from './config'
 import { showCommandCenter, toggleCommandCenter, ensureVoiceSurfaceExists, createTray } from './window'
 import { registerIpcHandlers, toggleSession } from './ipc'
 import { registerBuiltInTools } from './tools'
+import { initUpdater, checkForUpdates } from './update/updater'
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.weston.jarvis')
@@ -45,6 +46,12 @@ app.whenReady().then(() => {
   // (see window.ts's showAmbient/showCommandCenter: the two are mutually
   // exclusive, never both visible at once).
   showCommandCenter()
+
+  // Startup update check — background, non-blocking, no-op in dev (see
+  // updater.ts). A short delay avoids competing with the app's own
+  // launch/voice-surface setup for network and CPU.
+  initUpdater()
+  setTimeout(() => checkForUpdates(), 5000)
 
   const registered = globalShortcut.register(config.hotkey, () => {
     toggleSession()

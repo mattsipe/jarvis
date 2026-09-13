@@ -2,10 +2,12 @@ import { useEffect, useState } from 'react'
 import Core from './hud/Core'
 import Rings from './hud/Rings'
 import ErrorBanner from './hud/ErrorBanner'
+import UpdateBanner from './hud/UpdateBanner'
 import { useHudStore, type HudState } from './state/hudStore'
 import { useTranscriptStore } from './state/transcriptStore'
 import { useToolBridge } from './state/useToolBridge'
 import { useVoiceErrorStore } from './state/voiceErrorStore'
+import { useUpdateStore } from './state/updateStore'
 import { setAmplitude } from './hud/core/amplitudeBus'
 import SystemTelemetryPanel from './commandcenter/SystemTelemetryPanel'
 import IntegrationsPanel from './commandcenter/IntegrationsPanel'
@@ -46,8 +48,10 @@ export default function CommandCenterApp(): React.JSX.Element {
         console.error(`[jarvis] voice error (${stage}):`, message)
         useHudStore.getState().setState('error')
         useVoiceErrorStore.getState().setError(message, stage)
-      })
+      }),
+      window.jarvis.onUpdateState((state) => useUpdateStore.getState().setFromMain(state))
     ]
+    window.jarvis.getUpdateState().then((state) => useUpdateStore.getState().setFromMain(state as Record<string, unknown>))
     return () => unsubscribers.forEach((unsub) => unsub())
   }, [])
 
@@ -80,9 +84,13 @@ export default function CommandCenterApp(): React.JSX.Element {
           <button onClick={() => window.jarvis.switchToAmbient()} style={headerButtonStyle(false)}>
             Ambient Mode
           </button>
+          <button onClick={() => window.jarvis.checkForUpdates()} style={headerButtonStyle(false)}>
+            Check for Updates
+          </button>
         </div>
       </header>
       <ErrorBanner />
+      <UpdateBanner />
 
       <div
         style={{

@@ -1,0 +1,44 @@
+name: Release Windows build
+
+# Builds and publishes the Windows installer on a *native* Windows runner.
+#
+# This exists because of a confirmed, documented electron-builder/NSIS
+# failure class: cross-building a Windows NSIS installer from macOS can
+# produce a corrupted uninstaller that fails Windows' own integrity check on
+# uninstall (see electron-userland/electron-builder#4875 — the exact
+# "Installer integrity check has failed" symptom, tied to a macOS host).
+# Building on windows-latest removes that failure mode entirely.
+#
+# Trigger: push a tag matching v* (its suffix must match package.json's
+# "version" field exactly, e.g. version "0.2.0-test.1" -> tag "v0.2.0-test.1")
+# or run manually from the Actions tab.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - run: npm run build
+
+      # --publish always uploads the installer, the .blockmap, and the
+      # channel metadata file (test.yml / latest.yml) that electron-updater
+      # needs to find and verify updates — a manually-uploaded release asset
+      # (the previous process) has no update metadata at all.
+      - run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
