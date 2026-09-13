@@ -1,19 +1,40 @@
-import type { BrowserWindow } from 'electron'
 import { createSttProvider, type SttProvider } from './stt'
 import { ElevenLabsTts } from './tts/elevenlabs'
-import { runAgentTurn } from '../agent/loop'
+import { runAgentTurn, type ToolCallInfo } from '../agent/loop'
+import { broadcast } from '../window'
+import { TurnTimer } from './telemetry'
+import { usage } from './usage'
+import { config } from '../config'
+import { requestConfirmation, tryResolveConfirmationFromSpeech } from '../tools/confirmation'
+import { recordToolActivity } from '../tools/activity'
+import { contextManager } from '../context'
 
 const INACTIVITY_TIMEOUT_MS = 8000
+// Hard cap on one continuous session, regardless of activity — bounds
+// worst-case Deepgram streaming minutes if a session is somehow never
+// ended normally (e.g. the app is left running and the hotkey forgotten).
+const MAX_SESSION_MS = config.maxSessionMinutes * 60 * 1000
+
+function describeToolCall(call: ToolCallInfo): string {
+  const input = call.input && typeof call.input === 'object' ? JSON.stringify(call.input) : String(call.input ?? '')
+  return `${call.name}${input && input !== '{}' ? ` ${input}` : ''}`
+}
 
 /**
  * One continuous conversation session — started by a single hotkey press,
- * ended by pressing it again (or by an inactivity timeout with no speech
- * at all). Within the session, each utterance auto-submits when Deepgram
- * detects a real pause (speechFinal), listening automatically resumes
- * once JARVIS's reply has actually finished *playing* (resumeAfterPlayback,
- * signaled by the renderer — only it knows real playback timing), and the
- * user can barge in while JARVIS is thinking/speaking (bargeIn) to cut it
- * off and start the next turn immediately, same session, same history.
+ * ended by pressing it again (or by an inactivity/max-duration timeout).
+ * Within the session, each utterance auto-submits when Deepgram detects a
+ * real pause (speechFinal), listening automatically resumes once JARVIS's
+ * reply has actually finished *playing* (resumeAfterPlayback, signaled by
+ * the renderer — only it knows real playback timing), and the user can
+ * barge in while JARVIS is thinking/speaking (bargeIn) to cut it off and
+ * start the next turn immediately, same session, same history.
+ *
+ * Also doubles as the capture path for a spoken yes/no when an elevated
+ * tool call is awaiting confirmation (see requestToolConfirmation) — it
+ * briefly re-enters a listening phase for just that reply, distinct from
+ * a normal conversational turn (finishUtterance branches on
+ * `awaitingConfirmationSpeech`).
  *
  * `turnId` versions every response so a stale Claude/TTS event from a
  * turn that's since been superseded (by a barge-in, or the session
@@ -24,16 +45,21 @@ export class VoiceSession {
   private finalTranscript = ''
   private ended = false
   private inactivityTimer: ReturnType<typeof setTimeout> | null = null
+  private maxSessionTimer: ReturnType<typeof setTimeout> | null = null
   private utteranceFinished = false
+  private awaitingConfirmationSpeech = false
+  private currentTurnTimer: TurnTimer | null = null
+  private ttsCharWarningLogged = false
 
   private turnId = 0
   private activeAbortController: AbortController | null = null
   private activeTts: ElevenLabsTts | null = null
 
-  constructor(
-    private win: BrowserWindow,
-    private onEnded: () => void
-  ) {}
+  constructor(private onEnded: () => void) {
+    usage.recordSessionStart()
+    contextManager.setVoiceSessionActive(true)
+    this.maxSessionTimer = setTimeout(() => this.endSession(), MAX_SESSION_MS)
+  }
 
   /** Starts (or restarts, for the next turn) one listening phase. */
   beginListening(sampleRate: number): void {
@@ -55,6 +81,7 @@ export class VoiceSession {
       this.send('voice:error', { message: err.message, stage: 'stt' })
     })
     stt.start(sampleRate)
+    usage.startSttStream()
     this.stt = stt
     this.resetInactivityTimer()
   }
@@ -90,12 +117,13 @@ export class VoiceSession {
     this.ended = true
     this.turnId++
     this.clearInactivityTimer()
-    this.stt?.stop()
-    this.stt = null
+    if (this.maxSessionTimer) clearTimeout(this.maxSessionTimer)
+    this.stopStt()
     this.activeAbortController?.abort()
     this.activeAbortController = null
     this.activeTts?.close()
     this.activeTts = null
+    contextManager.setVoiceSessionActive(false)
     this.send('hud:state', 'ambient')
     this.send('voice:session-ended', null)
     this.onEnded()
@@ -105,6 +133,22 @@ export class VoiceSession {
   resumeAfterPlayback(): void {
     if (this.ended) return
     this.send('voice:resume-listening', null)
+  }
+
+  /** Called from IPC once the renderer schedules the first audio sample of a reply — the true playback-start latency mark. */
+  notifyPlaybackStarted(): void {
+    if (!this.currentTurnTimer) return
+    this.currentTurnTimer.mark('playbackStart')
+    this.currentTurnTimer.report()
+    this.send('voice:latency', this.currentTurnTimer.snapshot()) // Command Center diagnostics panel
+  }
+
+  private stopStt(): void {
+    if (this.stt) {
+      this.stt.stop()
+      this.stt = null
+      usage.stopSttStream()
+    }
   }
 
   private resetInactivityTimer(): void {
@@ -125,10 +169,19 @@ export class VoiceSession {
     if (this.utteranceFinished) return
     this.utteranceFinished = true
     this.clearInactivityTimer()
-    this.stt?.stop()
-    this.stt = null
+    this.stopStt()
     const text = this.finalTranscript.trim()
     this.finalTranscript = ''
+
+    // Not a new conversational turn — this listening phase was opened
+    // just to capture a yes/no for a pending elevated-tool confirmation.
+    // requestToolConfirmation's `finally` handles returning to a normal
+    // state once the confirmation resolves (by voice, click, or timeout).
+    if (this.awaitingConfirmationSpeech) {
+      if (text) tryResolveConfirmationFromSpeech(text)
+      else this.send('voice:resume-listening', null) // pause with nothing said — keep waiting
+      return
+    }
 
     if (!text) {
       // A pause was detected but nothing was actually said (e.g. the user
@@ -138,8 +191,13 @@ export class VoiceSession {
       return
     }
 
+    const timer = new TurnTimer()
+    timer.mark('speechEnd')
+    timer.mark('sttFinal')
+    this.currentTurnTimer = timer
+
     const myTurnId = ++this.turnId
-    this.respond(text, myTurnId).catch((err) => {
+    this.respond(text, myTurnId, timer).catch((err) => {
       if (myTurnId !== this.turnId) return // superseded by a barge-in or session end — ignore
       this.send('voice:error', {
         message: err instanceof Error ? err.message : String(err),
@@ -149,7 +207,24 @@ export class VoiceSession {
     })
   }
 
-  private async respond(text: string, myTurnId: number): Promise<void> {
+  /**
+   * Wraps tools/confirmation.ts's promise with a dedicated listening phase
+   * so a spoken "yes"/"no" can resolve it without another hotkey press —
+   * see finishUtterance's awaitingConfirmationSpeech branch.
+   */
+  private async requestToolConfirmation(call: ToolCallInfo): Promise<boolean> {
+    this.awaitingConfirmationSpeech = true
+    this.send('voice:resume-listening', null) // renderer re-opens streaming + Deepgram picks up the reply
+    try {
+      return await requestConfirmation(call.name, describeToolCall(call))
+    } finally {
+      this.awaitingConfirmationSpeech = false
+      this.stopStt()
+      if (!this.ended) this.send('hud:state', 'thinking') // back to a working state while the agent loop continues
+    }
+  }
+
+  private async respond(text: string, myTurnId: number, timer: TurnTimer): Promise<void> {
     this.send('hud:state', 'thinking')
 
     const controller = new AbortController()
@@ -158,11 +233,13 @@ export class VoiceSession {
     const tts = new ElevenLabsTts()
     this.activeTts = tts
     let ttsStarted = false
+    let firstSentenceSeen = false
 
     tts.on('audio', (chunk) => {
       if (myTurnId !== this.turnId) return
       if (!ttsStarted) {
         ttsStarted = true
+        timer.mark('firstTtsAudio')
         this.send('hud:state', 'speaking')
       }
       const arrayBuffer = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength)
@@ -176,16 +253,58 @@ export class VoiceSession {
       if (myTurnId !== this.turnId) return
       this.send('voice:error', { message: err.message, stage: 'tts' })
     })
-    tts.connect()
+
+    timer.mark('ttsRequest')
+    tts.connect() // opened in parallel with the Claude call below, not lazily on first sentence — avoids adding the WS handshake to perceived latency
 
     const result = await runAgentTurn(
       text,
       (sentence) => {
         if (myTurnId !== this.turnId) return // barged-in since — stop feeding TTS
+        if (!firstSentenceSeen) {
+          firstSentenceSeen = true
+          timer.mark('firstSpeakablePhrase')
+        }
         this.send('voice:assistant-text', sentence)
-        tts.sendText(sentence)
+
+        const withinCap = !config.ttsDevCharCap || usage.snapshot().ttsCharsTotal < config.ttsDevCharCap
+        if (withinCap) {
+          usage.addTtsChars(sentence.length)
+          tts.sendText(sentence)
+        } else if (!this.ttsCharWarningLogged) {
+          this.ttsCharWarningLogged = true
+          console.warn(
+            `[jarvis] TTS_DEV_CHAR_CAP (${config.ttsDevCharCap}) reached — further sentences this turn are shown but not spoken.`
+          )
+        }
       },
-      controller.signal
+      controller.signal,
+      {
+        onFirstToken: () => timer.mark('claudeFirstToken'),
+        onToolStart: (call) => {
+          recordToolActivity({
+            id: call.id,
+            name: call.name,
+            risk: call.risk,
+            input: call.input,
+            status: call.risk === 'elevated' ? 'confirm-pending' : 'started',
+            timestamp: new Date().toISOString()
+          })
+          if (call.risk !== 'elevated' && myTurnId === this.turnId) this.send('hud:state', 'acting')
+        },
+        onToolResult: (call, toolResult) => {
+          recordToolActivity({
+            id: call.id,
+            name: call.name,
+            risk: call.risk,
+            input: call.input,
+            status: toolResult.ok ? 'success' : call.risk === 'elevated' && !toolResult.ok ? 'denied' : 'error',
+            message: toolResult.message,
+            timestamp: new Date().toISOString()
+          })
+        },
+        requestConfirmation: (call) => this.requestToolConfirmation(call)
+      }
     )
 
     if (myTurnId !== this.turnId) return // superseded while awaiting — don't signal end-of-turn
@@ -196,6 +315,6 @@ export class VoiceSession {
   }
 
   private send(channel: string, payload: unknown): void {
-    if (!this.win.isDestroyed()) this.win.webContents.send(channel, payload)
+    broadcast(channel, payload)
   }
 }

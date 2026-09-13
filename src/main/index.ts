@@ -1,8 +1,9 @@
 import { app, globalShortcut, BrowserWindow } from 'electron'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { config, assertVoiceLoopConfigured } from './config'
-import { createOverlayWindow } from './window'
+import { createOverlayWindow, toggleCommandCenter } from './window'
 import { registerIpcHandlers, toggleSession } from './ipc'
+import { registerBuiltInTools } from './tools'
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.weston.jarvis')
@@ -18,6 +19,7 @@ app.whenReady().then(() => {
     console.warn('[jarvis] Voice loop disabled until .env is filled in — the HUD still runs.')
   }
 
+  registerBuiltInTools()
   registerIpcHandlers()
   createOverlayWindow()
 
@@ -27,6 +29,13 @@ app.whenReady().then(() => {
   })
   if (!registered) {
     console.warn(`[jarvis] failed to register hotkey: ${config.hotkey}`)
+  }
+
+  const commandCenterRegistered = globalShortcut.register(config.commandCenterHotkey, () => {
+    toggleCommandCenter()
+  })
+  if (!commandCenterRegistered) {
+    console.warn(`[jarvis] failed to register Command Center hotkey: ${config.commandCenterHotkey}`)
   }
 
   app.on('activate', () => {

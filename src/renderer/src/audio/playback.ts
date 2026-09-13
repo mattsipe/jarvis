@@ -16,6 +16,7 @@ export class TtsPlayback {
   private aborted = false
   private rafId: number | null = null
   private finishedCallback: (() => void) | null = null
+  private firstScheduleNotified = false
 
   constructor() {
     this.ctx = new AudioContext({ sampleRate: 16000 })
@@ -48,6 +49,11 @@ export class TtsPlayback {
     const startAt = Math.max(this.nextStartTime, this.ctx.currentTime)
     source.start(startAt)
     this.nextStartTime = startAt + buffer.duration
+
+    if (!this.firstScheduleNotified) {
+      this.firstScheduleNotified = true
+      window.jarvis.notifyPlaybackStarted() // latency telemetry's final mark — see voice/telemetry.ts
+    }
 
     this.activeSources.add(source)
     source.onended = () => {

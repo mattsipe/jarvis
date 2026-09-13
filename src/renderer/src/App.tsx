@@ -3,8 +3,12 @@ import Core from './hud/Core'
 import Rings from './hud/Rings'
 import Transcript from './hud/Transcript'
 import DevStateSwitcher from './hud/DevStateSwitcher'
+import ToolConfirm from './hud/ToolConfirm'
+import CommandCenterLauncher from './hud/CommandCenterLauncher'
 import { useHudStore, type HudState } from './state/hudStore'
 import { useTranscriptStore } from './state/transcriptStore'
+import { useToolBridge } from './state/useToolBridge'
+import { subscribeAmplitude } from './hud/core/amplitudeBus'
 import { MicCapture } from './audio/capture'
 import { TtsPlayback } from './audio/playback'
 
@@ -35,6 +39,21 @@ function isHudState(v: string): v is HudState {
 export default function App(): React.JSX.Element {
   const micRef = useRef<MicCapture | null>(null)
   const ttsRef = useRef<TtsPlayback | null>(null)
+
+  useToolBridge()
+
+  // Ambient is the only window with a real audio graph — forward its live
+  // amplitude (throttled) so Command Center's core can react to it too,
+  // without giving Command Center its own mic/TTS pipeline.
+  useEffect(() => {
+    let lastSent = 0
+    return subscribeAmplitude((value) => {
+      const now = performance.now()
+      if (now - lastSent < 33 && value !== null) return
+      lastSent = now
+      window.jarvis.reportAmplitude(value)
+    })
+  }, [])
 
   useEffect(() => {
     function beginListening(mic: MicCapture): void {
@@ -152,7 +171,9 @@ export default function App(): React.JSX.Element {
       <Rings />
       <Core />
       <Transcript />
-      <DevStateSwitcher />
+      <ToolConfirm />
+      <CommandCenterLauncher />
+      {import.meta.env.DEV && <DevStateSwitcher />}
     </div>
   )
 }

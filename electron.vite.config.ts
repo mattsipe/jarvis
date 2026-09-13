@@ -15,6 +15,14 @@ export default defineConfig({
         '@renderer': resolve('src/renderer/src')
       }
     },
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/renderer/index.html'),
+          commandCenter: resolve('src/renderer/command-center.html')
+        }
+      }
+    },
     plugins: [react()]
   }
 })
