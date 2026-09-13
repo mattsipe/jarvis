@@ -50,6 +50,11 @@ export function initUpdater(): void {
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
   autoUpdater.allowPrerelease = config.updateChannel === 'test'
+  // Must match electron-builder.yml's publish.channel exactly — that's what
+  // names the metadata file (test.yml) electron-updater looks for on the
+  // release. Left unset ('latest', the electron-updater default) once
+  // electron-builder.yml's channel is removed for a real stable release.
+  autoUpdater.channel = config.updateChannel === 'test' ? 'test' : 'latest'
 
   autoUpdater.on('checking-for-update', () => {
     logInfo('updater', 'checking for update')

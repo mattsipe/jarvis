@@ -31,10 +31,15 @@ publish:
   - provider: github
     owner: mattsipe
     repo: jarvis
-    # electron-updater reads the update-channel file that matches the
-    # running app's own version prerelease tag (e.g. "0.2.0-test.1" ->
-    # "test.yml"). Publishing plain "1.0.0"-style versions later switches
-    # the channel to "latest" automatically — see src/main/update/updater.ts.
+    # electron-builder's GitHub releaseType defaults to "draft" — without
+    # this, --publish always silently creates a draft that nobody (not
+    # even electron-updater) can see. "channel" fixes the update-metadata
+    # filename (test.yml) so it's unambiguous and doesn't depend on
+    # inferring anything from the version string. Both are deliberately
+    # flipped by hand ("release" / omit channel, i.e. "latest") the day a
+    # real stable channel starts — see src/main/update/updater.ts.
+    releaseType: prerelease
+    channel: test
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
