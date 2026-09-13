@@ -36,7 +36,17 @@ const jarvisAPI = {
   onTtsDone: (cb: () => void) => on('voice:tts-done', cb),
   onAgentDone: (cb: (payload: { tier: string }) => void) => on('voice:agent-done', cb),
   onVoiceError: (cb: (payload: { message: string; stage: string }) => void) =>
-    on('voice:error', cb)
+    on('voice:error', cb),
+
+  // --- Continuous conversation (M2 follow-up) ---
+  /** Tell main the actual audio playback (not just TTS generation) has finished. */
+  notifyPlaybackFinished(): void {
+    ipcRenderer.send('voice:playback-finished')
+  },
+  /** Main says it's time to start listening for the next turn. */
+  onResumeListening: (cb: () => void) => on('voice:resume-listening', cb),
+  /** The whole conversation session ended (hotkey pressed again, or inactivity timeout). */
+  onSessionEnded: (cb: () => void) => on('voice:session-ended', cb)
 }
 
 if (process.contextIsolated) {

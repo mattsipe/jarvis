@@ -2,7 +2,7 @@ import { app, globalShortcut, BrowserWindow } from 'electron'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { config, assertVoiceLoopConfigured } from './config'
 import { createOverlayWindow } from './window'
-import { registerIpcHandlers, toggleListening } from './ipc'
+import { registerIpcHandlers, toggleSession } from './ipc'
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.weston.jarvis')
@@ -22,7 +22,7 @@ app.whenReady().then(() => {
   createOverlayWindow()
 
   const registered = globalShortcut.register(config.hotkey, () => {
-    toggleListening()
+    toggleSession()
     if (is.dev) console.log(`[jarvis] hotkey ${config.hotkey} pressed`)
   })
   if (!registered) {

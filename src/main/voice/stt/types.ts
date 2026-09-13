@@ -3,6 +3,8 @@ import { EventEmitter } from 'events'
 export interface TranscriptEvent {
   text: string
   isFinal: boolean
+  /** True when the provider detected a real pause (end of utterance), not just a finalized word chunk. */
+  speechFinal: boolean
 }
 
 /**

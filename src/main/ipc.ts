@@ -4,28 +4,31 @@ import { setInteractive, getOverlayWindow } from './window'
 import { VoiceSession } from './voice/session'
 
 let session: VoiceSession | null = null
-let listening = false
+let sessionActive = false
 
 /**
- * Hotkey-driven toggle: first call starts listening (opens mic capture in
- * the renderer + STT in main), second call stops it and runs the agent
- * turn. Called from main/index.ts's global shortcut handler.
+ * Hotkey-driven session control: first press starts a continuous
+ * conversation (see VoiceSession — auto-submits per utterance, listening
+ * resumes automatically between turns), second press ends it immediately
+ * regardless of which phase it's in. Called from main/index.ts's global
+ * shortcut handler.
  */
-export function toggleListening(): void {
+export function toggleSession(): void {
   const win = getOverlayWindow()
   if (!win) return
 
-  listening = !listening
-  win.webContents.send('voice:toggle', { listening })
-
-  if (listening) {
-    session = new VoiceSession(win)
-  } else if (session) {
-    const activeSession = session
-    session = null
-    activeSession.stopAndRespond().catch((err) => {
-      console.error('[jarvis] voice session error:', err)
+  if (!sessionActive) {
+    sessionActive = true
+    session = new VoiceSession(win, () => {
+      sessionActive = false
+      session = null
     })
+    win.webContents.send('voice:toggle', { listening: true })
+  } else {
+    session?.endSession()
+    sessionActive = false
+    session = null
+    win.webContents.send('voice:toggle', { listening: false })
   }
 }
 
@@ -35,11 +38,18 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.on('voice:start', (_event, sampleRate: number) => {
-    session?.startListening(sampleRate)
+    session?.beginListening(sampleRate)
   })
 
   ipcMain.on('voice:audio-chunk', (_event, chunk: ArrayBuffer) => {
     session?.pushAudio(Buffer.from(chunk))
+  })
+
+  // Renderer is the only one who knows when actual audio *playback*
+  // (not just TTS generation) has finished — that's the correct moment
+  // to resume listening for the next turn.
+  ipcMain.on('voice:playback-finished', () => {
+    session?.resumeAfterPlayback()
   })
 
   // Dev-only: lets automated/manual testing trigger the exact same code path
@@ -47,6 +57,6 @@ export function registerIpcHandlers(): void {
   // simulate a real keystroke. Never registered in a packaged build — the
   // hotkey remains the only trigger for real usage.
   if (is.dev) {
-    ipcMain.on('voice:dev-toggle', () => toggleListening())
+    ipcMain.on('voice:dev-toggle', () => toggleSession())
   }
 }

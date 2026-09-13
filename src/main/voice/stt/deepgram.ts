@@ -38,8 +38,12 @@ export class DeepgramStt extends SttProvider {
         if (msg.type !== 'Results') return
         const alt = msg.channel?.alternatives?.[0]
         const text: string = alt?.transcript ?? ''
-        if (!text) return
-        this.emit('transcript', { text, isFinal: Boolean(msg.is_final) })
+        const speechFinal = Boolean(msg.speech_final)
+        // Emit even with empty text when speechFinal fires (e.g. a trailing
+        // silence-only segment) — the caller needs that "utterance ended"
+        // signal regardless of whether it carried new words.
+        if (!text && !speechFinal) return
+        this.emit('transcript', { text, isFinal: Boolean(msg.is_final), speechFinal })
       } catch (err) {
         this.emit('error', err instanceof Error ? err : new Error(String(err)))
       }
