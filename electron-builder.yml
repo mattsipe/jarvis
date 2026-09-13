@@ -3,19 +3,42 @@ productName: JARVIS
 directories:
   buildResources: build
 files:
-  - '!**/.vscode/*'
-  - '!src/*'
+  # A serious pre-existing packaging bug, found and confirmed by directly
+  # inspecting a shipped release's actual app.asar (not assumed): every
+  # release since jarvis-helper.exe was added has been shipping the FULL
+  # .git history (CI's checkout includes .git/, and nothing excluded it —
+  # a real concern beyond just size, since git history can carry things a
+  # later commit removed) and a complete self-referential duplicate of
+  # electron-builder's own output directory, including a second full copy
+  # of electron.exe (~200MB) — dist/ isn't excluded, so electron-builder's
+  # in-progress build output was getting swept into the very app.asar it
+  # was building, in the same run. A shallow `dir/*` pattern (as this file
+  # used for src/ and briefly for native/) does NOT recurse into
+  # subdirectories in electron-builder's matcher — confirmed by testing —
+  # so every directory exclusion below uses a leading `**/` and a
+  # trailing `/**`, the pattern documented (and needed here, verified by
+  # re-inspecting the actual packaged output) to reliably match regardless
+  # of nesting depth.
+  - '!**/.git/**'
+  - '!**/dist/**'
+  - '!**/.vscode/**'
+  - '!**/src/**'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintignore,.eslintrc.cjs,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  # native/jarvis-helper/bin's intermediate dotnet-publish output (dozens
+  # of .NET framework DLLs) — only the final jarvis-helper.exe belongs,
+  # placed separately below via extraResources (which reads straight from
+  # that source path, independent of this `files` selection).
+  - '!**/native/**'
   # Placed via extraResources below instead — a real file outside the asar
   # archive, like jarvis-helper.exe, rather than inside it (see that
   # extraResources entry's comment for why: the ONNX runtime's native
   # addon does its own file I/O on whatever path resourcePath() computes,
   # which fails if it's still an asar-virtual path — confirmed by an
   # actual packaged smoke test, not assumed).
-  - '!resources/wakeword/**'
+  - '!**/resources/wakeword/**'
 extraResources:
   # presence/wakeword.ts's local openWakeWord engine — see that file's
   # resourcePath(). Every platform needs these (mac for dev/testing too,
@@ -57,12 +80,12 @@ win:
   # opened. Scoped to `win:` (rather than the root `files` list) so a local
   # macOS dev build still gets its own platform's binaries untouched.
   files:
-    - '!node_modules/onnxruntime-node/bin/napi-v6/darwin/**'
-    - '!node_modules/onnxruntime-node/bin/napi-v6/linux/**'
-    - '!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**'
-    - '!node_modules/onnxruntime-node/bin/napi-v6/win32/x64/DirectML.dll'
-    - '!node_modules/onnxruntime-node/bin/napi-v6/win32/x64/dxcompiler.dll'
-    - '!node_modules/onnxruntime-node/bin/napi-v6/win32/x64/dxil.dll'
+    - '!**/node_modules/onnxruntime-node/bin/napi-v6/darwin/**'
+    - '!**/node_modules/onnxruntime-node/bin/napi-v6/linux/**'
+    - '!**/node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**'
+    - '!**/node_modules/onnxruntime-node/bin/napi-v6/win32/x64/DirectML.dll'
+    - '!**/node_modules/onnxruntime-node/bin/napi-v6/win32/x64/dxcompiler.dll'
+    - '!**/node_modules/onnxruntime-node/bin/napi-v6/win32/x64/dxil.dll'
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
