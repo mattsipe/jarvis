@@ -6,7 +6,7 @@ import { runAgentTurn } from './agent/loop'
 import { resolveConfirmation, requestConfirmation } from './tools/confirmation'
 import { getToolActivityHistory } from './tools/activity'
 import { runToolStandalone } from './tools'
-import { usage } from './voice/usage'
+import { getBudgetStatus, setBudgetConfig, type BudgetConfig } from './usage'
 import { contextManager } from './context'
 import { config, getConfigDiagnostics, saveApiKeys } from './config'
 import { checkForUpdates, installUpdateAndRestart, getUpdateState } from './update/updater'
@@ -134,7 +134,15 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('tool:activity-history', () => getToolActivityHistory())
   // Command Center's "Run Self-Test" button — exercises platform capabilities without requiring voice. See platform/windows.ts's selfTest().
   ipcMain.handle('system:self-test', () => runToolStandalone('self_test'))
-  ipcMain.handle('usage:snapshot', () => usage.snapshot())
+
+  // Centralized API usage/budget manager — see usage/index.ts. One call
+  // gets today's/this month's/all-time usage and cost per provider, the
+  // configured limits, and whether either period's soft/hard limit has
+  // been crossed; the setter is Command Center's Usage & Budget panel
+  // editing the master protection switch or any limit.
+  ipcMain.handle('usage:budget-status', () => getBudgetStatus())
+  ipcMain.handle('usage:budget-set-config', (_event, patch: Partial<BudgetConfig>) => setBudgetConfig(patch))
+
   ipcMain.handle('context:live', () => contextManager.getLiveContext())
   ipcMain.handle('context:persistent', () => contextManager.getPersistent())
   // Presence only — never the keys themselves — for the Integrations panel.

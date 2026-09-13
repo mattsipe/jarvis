@@ -7,12 +7,6 @@ interface ServicesStatus {
   deepgram: boolean
 }
 
-interface UsageSnapshot {
-  sttSecondsTotal: number
-  ttsCharsTotal: number
-  sessionCount: number
-}
-
 interface ConfigDiagnostics {
   configDir: string
   envPath: string
@@ -49,7 +43,6 @@ const inputStyle: React.CSSProperties = {
  */
 export default function IntegrationsPanel(): React.JSX.Element {
   const [services, setServices] = useState<ServicesStatus | null>(null)
-  const [usage, setUsage] = useState<UsageSnapshot | null>(null)
   const [diagnostics, setDiagnostics] = useState<ConfigDiagnostics | null>(null)
   const [editing, setEditing] = useState(false)
   const [autoOpened, setAutoOpened] = useState(false)
@@ -71,12 +64,6 @@ export default function IntegrationsPanel(): React.JSX.Element {
 
   useEffect(() => {
     refresh()
-    const poll = (): void => {
-      window.jarvis.getUsageSnapshot().then((u) => setUsage(u as UsageSnapshot))
-    }
-    poll()
-    const id = setInterval(poll, 5000)
-    return () => clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -116,15 +103,6 @@ export default function IntegrationsPanel(): React.JSX.Element {
               .env error: {diagnostics.envLoadError}
             </div>
           )}
-        </>
-      )}
-
-      {usage && (
-        <>
-          <div style={{ height: 6 }} />
-          <Row label="STT minutes used" value={(usage.sttSecondsTotal / 60).toFixed(1)} />
-          <Row label="TTS characters used" value={usage.ttsCharsTotal.toLocaleString()} />
-          <Row label="Sessions" value={String(usage.sessionCount)} />
         </>
       )}
 

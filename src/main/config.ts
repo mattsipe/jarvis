@@ -21,7 +21,7 @@ app.setName('jarvis')
 // config directories with no error from anyone. So CONFIG_DIR is pinned
 // explicitly to appData + the literal folder name "jarvis", and every other
 // module that used to call app.getPath('userData') directly (context/store,
-// voice/usage, context/local) now goes through app.getPath('userData') as
+// usage/tracker, context/local) now goes through app.getPath('userData') as
 // usual — but userData itself is *overridden* to this exact path via
 // app.setPath below, so there is only ever one real config directory, and
 // diagnostics can report its exact value instead of us guessing at it from

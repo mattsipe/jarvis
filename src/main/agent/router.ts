@@ -1,4 +1,5 @@
 import type { ModelTier } from './config'
+import { applyCostPressure } from '../usage/budgetLogic'
 
 const COMPLEXITY_KEYWORDS = [
   'and then',
@@ -23,11 +24,22 @@ const VISION_KEYWORDS = ['this', 'that', 'look', 'see', 'screen', 'error', 'clic
  * Cheap heuristic for tier1 (Haiku, fast/cheap) vs tier2 (Opus, high
  * effort). Can graduate to a one-line Haiku classification later if this
  * proves too blunt in practice.
+ *
+ * `costPressure` (set once the daily/monthly *soft* budget limit is
+ * crossed — see usage/budgetManager.ts) downgrades a length/complexity
+ * escalation back to tier1, since those are judgment calls about how much
+ * effort a turn deserves, not correctness requirements. A vision
+ * escalation is never downgraded: look_at_screen results need real visual
+ * reasoning, so a wrong answer there is a correctness problem, not just a
+ * cost one — see the plan's screen-perception priority.
  */
-export function pickTier(text: string): ModelTier {
+export function pickTier(text: string, opts?: { costPressure?: boolean }): ModelTier {
   const t = text.trim().toLowerCase()
-  if (t.length > 220) return 'tier2'
-  if (COMPLEXITY_KEYWORDS.some((kw) => t.includes(kw))) return 'tier2'
-  if (VISION_KEYWORDS.some((kw) => new RegExp(`\\b${kw}\\b`).test(t))) return 'tier2'
+  const costPressure = opts?.costPressure ?? false
+  if (VISION_KEYWORDS.some((kw) => new RegExp(`\\b${kw}\\b`).test(t))) {
+    return applyCostPressure('tier2', costPressure, 'vision')
+  }
+  if (t.length > 220) return applyCostPressure('tier2', costPressure, 'length')
+  if (COMPLEXITY_KEYWORDS.some((kw) => t.includes(kw))) return applyCostPressure('tier2', costPressure, 'complexity')
   return 'tier1'
 }

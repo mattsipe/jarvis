@@ -101,7 +101,6 @@ const jarvisAPI = {
   runSelfTest: (): Promise<unknown> => ipcRenderer.invoke('system:self-test'),
 
   // --- Diagnostics / context (Command Center panels) ---
-  getUsageSnapshot: (): Promise<unknown> => ipcRenderer.invoke('usage:snapshot'),
   getLiveContext: (): Promise<unknown> => ipcRenderer.invoke('context:live'),
   getPersistentContext: (): Promise<unknown> => ipcRenderer.invoke('context:persistent'),
   getServicesStatus: (): Promise<{ anthropic: boolean; elevenlabs: boolean; deepgram: boolean }> =>
@@ -116,6 +115,13 @@ const jarvisAPI = {
   getMemoryList: (): Promise<unknown[]> => ipcRenderer.invoke('memory:list'),
   updateMemory: (id: string, content: string): Promise<unknown> => ipcRenderer.invoke('memory:update', id, content),
   deleteMemory: (id: string): Promise<unknown> => ipcRenderer.invoke('memory:delete', id),
+
+  // --- API usage / budget manager (Command Center Usage & Budget panel) ---
+  getBudgetStatus: (): Promise<unknown> => ipcRenderer.invoke('usage:budget-status'),
+  setBudgetConfig: (patch: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('usage:budget-set-config', patch),
+  /** Fired at most once per 50/75/90% threshold crossed, per day/month period — see usage/budgetManager.ts. */
+  onBudgetWarning: (cb: (payload: { period: 'daily' | 'monthly'; threshold: number; spentUsd: number; limitUsd: number }) => void) =>
+    on('usage:warning', cb),
 
   /** Dev-only — see ipc.ts's 'dev:test-agent-turn'. Not registered in production; rejects there. */
   devTestAgentTurn: (text: string): Promise<unknown> => ipcRenderer.invoke('dev:test-agent-turn', text),

@@ -1,12 +1,15 @@
 import { createSttProvider, type SttProvider } from './stt'
 import { ElevenLabsTts } from './tts/elevenlabs'
 import { runAgentTurn, type ToolCallInfo } from '../agent/loop'
+import { matchLocalCommand, type LocalCommandMatch } from '../agent/localCommands'
 import { broadcast } from '../window'
 import { TurnTimer } from './telemetry'
-import { usage } from './usage'
+import { usageTracker, budgetManager } from '../usage'
 import { config } from '../config'
 import { requestConfirmation, tryResolveConfirmationFromSpeech } from '../tools/confirmation'
 import { recordToolActivity } from '../tools/activity'
+import { toolRegistry } from '../tools/registry'
+import { getPlatformControl } from '../platform'
 import { contextManager } from '../context'
 import { learnFromSession, type SessionTurn } from '../context/autolearn'
 
@@ -59,7 +62,7 @@ export class VoiceSession {
   private turns: SessionTurn[] = []
 
   constructor(private onEnded: () => void) {
-    usage.recordSessionStart()
+    usageTracker.recordSessionStart()
     contextManager.setVoiceSessionActive(true)
     this.maxSessionTimer = setTimeout(() => this.endSession(), MAX_SESSION_MS)
   }
@@ -67,6 +70,20 @@ export class VoiceSession {
   /** Starts (or restarts, for the next turn) one listening phase. */
   beginListening(sampleRate: number): void {
     if (this.ended) return
+    // Guard against a duplicate concurrent stream — e.g. a double-fired
+    // hotkey/IPC event calling this twice before the first stream closes —
+    // which would otherwise open two simultaneous Deepgram connections and
+    // silently double-bill streaming minutes for the same utterance.
+    if (this.stt) this.stopStt()
+
+    const gate = budgetManager.checkDeepgramStream()
+    if (!gate.allowed) {
+      this.send('voice:error', { message: gate.reason ?? 'Voice input is disabled by the budget limit.', stage: 'stt' })
+      this.send('hud:state', 'error')
+      this.endSession()
+      return
+    }
+
     this.finalTranscript = ''
     this.utteranceFinished = false
     const stt = createSttProvider()
@@ -96,7 +113,7 @@ export class VoiceSession {
       this.terminate()
     })
     stt.start(sampleRate)
-    usage.startSttStream()
+    usageTracker.startDeepgramStream()
     this.stt = stt
     this.resetInactivityTimer()
   }
@@ -171,7 +188,8 @@ export class VoiceSession {
     if (this.stt) {
       this.stt.stop()
       this.stt = null
-      usage.stopSttStream()
+      usageTracker.stopDeepgramStream()
+      budgetManager.notifyUsageRecorded()
     }
   }
 
@@ -221,7 +239,9 @@ export class VoiceSession {
     this.currentTurnTimer = timer
 
     const myTurnId = ++this.turnId
-    this.respond(text, myTurnId, timer).catch((err) => {
+    const local = matchLocalCommand(text)
+    const handler = local ? this.respondLocally(local, text, myTurnId, timer) : this.respond(text, myTurnId, timer)
+    handler.catch((err) => {
       if (myTurnId !== this.turnId) return // superseded by a barge-in or session end — ignore
       this.send('voice:error', {
         message: err instanceof Error ? err.message : String(err),
@@ -248,17 +268,9 @@ export class VoiceSession {
     }
   }
 
-  private async respond(text: string, myTurnId: number, timer: TurnTimer): Promise<void> {
-    this.send('hud:state', 'thinking')
-
-    const controller = new AbortController()
-    this.activeAbortController = controller
-
-    const tts = new ElevenLabsTts()
-    this.activeTts = tts
+  /** Shared TTS event wiring for both the full Claude-driven turn and a local-command turn (see respondLocally). */
+  private wireTts(tts: ElevenLabsTts, myTurnId: number, timer: TurnTimer): void {
     let ttsStarted = false
-    let firstSentenceSeen = false
-
     tts.on('audio', (chunk) => {
       if (myTurnId !== this.turnId) return
       if (!ttsStarted) {
@@ -277,6 +289,67 @@ export class VoiceSession {
       if (myTurnId !== this.turnId) return
       this.send('voice:error', { message: err.message, stage: 'tts' })
     })
+  }
+
+  /**
+   * A phrase matched by agent/localCommands.ts — runs the tool directly and
+   * speaks a canned confirmation, with no Claude call at all. See the
+   * cost-aware-routing priority: this is the deterministic bypass for the
+   * handful of commands unambiguous enough not to need Claude's judgment.
+   */
+  private async respondLocally(local: LocalCommandMatch, text: string, myTurnId: number, timer: TurnTimer): Promise<void> {
+    this.send('hud:state', 'acting')
+    const id = `local-${local.toolName}-${Date.now()}`
+    const timestamp = new Date().toISOString()
+    recordToolActivity({ id, name: local.toolName, risk: 'safe', input: local.toolInput, status: 'started', timestamp })
+
+    const ctx = { platform: getPlatformControl(), context: contextManager }
+    const result = await toolRegistry.execute(local.toolName, local.toolInput, ctx)
+    recordToolActivity({
+      id,
+      name: local.toolName,
+      risk: 'safe',
+      input: local.toolInput,
+      status: result.ok ? 'success' : 'error',
+      message: result.message,
+      timestamp: new Date().toISOString(),
+      diagnostics: result.diagnostics
+    })
+
+    if (myTurnId !== this.turnId) return // superseded (barge-in/session end) while the tool was running
+    const spoken = result.ok ? local.spoken : result.message
+    this.send('voice:assistant-text', spoken)
+
+    const ttsGate = budgetManager.checkElevenLabsSynthesis()
+    if (ttsGate.allowed) {
+      const tts = new ElevenLabsTts()
+      this.activeTts = tts
+      this.wireTts(tts, myTurnId, timer)
+      tts.connect()
+      tts.sendText(spoken)
+      tts.end()
+      usageTracker.recordElevenLabsChars(spoken.length)
+      budgetManager.notifyUsageRecorded()
+      if (this.activeTts === tts) this.activeTts = null
+    } else {
+      this.send('hud:state', result.ok ? 'success' : 'error')
+    }
+
+    if (myTurnId !== this.turnId) return
+    this.turns.push({ userText: text, assistantText: spoken })
+    this.send('voice:agent-done', { tier: 'local' })
+  }
+
+  private async respond(text: string, myTurnId: number, timer: TurnTimer): Promise<void> {
+    this.send('hud:state', 'thinking')
+
+    const controller = new AbortController()
+    this.activeAbortController = controller
+
+    const tts = new ElevenLabsTts()
+    this.activeTts = tts
+    let firstSentenceSeen = false
+    this.wireTts(tts, myTurnId, timer)
 
     timer.mark('ttsRequest')
     tts.connect() // opened in parallel with the Claude call below, not lazily on first sentence — avoids adding the WS handshake to perceived latency
@@ -291,15 +364,16 @@ export class VoiceSession {
         }
         this.send('voice:assistant-text', sentence)
 
-        const withinCap = !config.ttsDevCharCap || usage.snapshot().ttsCharsTotal < config.ttsDevCharCap
-        if (withinCap) {
-          usage.addTtsChars(sentence.length)
+        const withinDevCap = !config.ttsDevCharCap || usageTracker.rawToday().elevenLabsChars < config.ttsDevCharCap
+        const budgetGate = budgetManager.checkElevenLabsSynthesis()
+        if (withinDevCap && budgetGate.allowed) {
+          usageTracker.recordElevenLabsChars(sentence.length)
+          budgetManager.notifyUsageRecorded()
           tts.sendText(sentence)
         } else if (!this.ttsCharWarningLogged) {
           this.ttsCharWarningLogged = true
-          console.warn(
-            `[jarvis] TTS_DEV_CHAR_CAP (${config.ttsDevCharCap}) reached — further sentences this turn are shown but not spoken.`
-          )
+          const why = !withinDevCap ? `TTS_DEV_CHAR_CAP (${config.ttsDevCharCap}) reached` : (budgetGate.reason ?? 'budget limit reached')
+          console.warn(`[jarvis] ${why} — further sentences this turn are shown but not spoken.`)
         }
       },
       controller.signal,

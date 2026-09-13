@@ -12,6 +12,10 @@ cp .env.example .env   # then fill in ANTHROPIC_API_KEY, ELEVENLABS_API_KEY, DEE
 npm run dev
 ```
 
+## Usage & budget limits
+
+Every metered call (Anthropic tokens by model, Deepgram streaming minutes, ElevenLabs characters) is tracked and, by default, capped — see `src/main/usage/` and Command Center's **Usage & Budget** panel. Soft/hard $ limits (daily and monthly), the master protection switch, and the per-turn token/time safety net are all editable there; `.env.example` documents the env vars that seed their defaults. Protection is on by default and stops nonessential/optional API calls once a hard limit is hit without breaking local desktop-control tools (mute, open app, screenshot, self-test, etc. never call a metered service to begin with).
+
 ## Scripts
 
 - `npm run dev` — launch in development

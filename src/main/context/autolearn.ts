@@ -3,18 +3,19 @@ import { config } from '../config'
 import { contextManager } from './index'
 import type { MemoryKind } from './memory'
 import { logInfo, logError } from '../logger'
+import { usageTracker, budgetManager } from '../usage'
 
 export interface SessionTurn {
   userText: string
   assistantText: string
 }
 
-/** Same rebuild-on-key-change pattern as agent/loop.ts's getClient() — see that file's comment for why. */
+/** Same rebuild-on-key-change pattern as agent/loop.ts's getClient() — see that file's comment for why. Retries capped the same way, for the same reason (see loop.ts's ANTHROPIC_MAX_RETRIES comment). */
 let cachedClient: Anthropic | null = null
 let cachedKey = ''
 function getClient(): Anthropic {
   if (!cachedClient || cachedKey !== config.anthropicApiKey) {
-    cachedClient = new Anthropic({ apiKey: config.anthropicApiKey })
+    cachedClient = new Anthropic({ apiKey: config.anthropicApiKey, maxRetries: 2 })
     cachedKey = config.anthropicApiKey
   }
   return cachedClient
@@ -57,6 +58,15 @@ export async function learnFromSession(turns: SessionTurn[]): Promise<void> {
     return
   }
 
+  // Background/nonessential — the session has already ended and nobody is
+  // waiting on this, so it's the first thing budget protection cuts off
+  // once a hard limit is hit (see the API-safeguards priority).
+  const gate = budgetManager.checkAnthropicCall({ essential: false })
+  if (!gate.allowed) {
+    logInfo('memory:autolearn', `skipped: ${gate.reason}`)
+    return
+  }
+
   try {
     const response = await getClient().messages.create({
       model: 'claude-haiku-4-5',
@@ -64,6 +74,14 @@ export async function learnFromSession(turns: SessionTurn[]): Promise<void> {
       system: EXTRACTION_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: transcript }]
     })
+    usageTracker.recordAnthropicUsage({
+      model: 'claude-haiku-4-5',
+      inputTokens: response.usage.input_tokens ?? 0,
+      outputTokens: response.usage.output_tokens,
+      cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
+      cacheReadTokens: response.usage.cache_read_input_tokens ?? 0
+    })
+    budgetManager.notifyUsageRecorded()
     const text = response.content.find((b): b is Anthropic.TextBlock => b.type === 'text')?.text ?? '[]'
     const jsonMatch = text.match(/\[[\s\S]*\]/)
     if (!jsonMatch) return

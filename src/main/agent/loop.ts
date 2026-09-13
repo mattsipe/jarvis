@@ -7,6 +7,15 @@ import { SentenceChunker } from '../voice/sentence'
 import { toolRegistry, type RiskLevel, type ToolResult } from '../tools/registry'
 import { getPlatformControl } from '../platform'
 import { contextManager } from '../context'
+import { usageTracker, budgetManager } from '../usage'
+import { getBudgetConfig } from '../usage/budgetConfig'
+
+// Caps the SDK's own automatic retry-on-transient-error behavior — see the
+// API-safeguards priority's "cap retries". 2 is the SDK's own default, made
+// explicit here rather than relied on, so a future SDK upgrade can't
+// silently raise it and turn one flaky request into an unbounded retry
+// storm against the budget.
+const ANTHROPIC_MAX_RETRIES = 2
 
 // Built lazily (and rebuilt if the key changes) rather than captured once at
 // module load — the key can now change at runtime via the Command Center's
@@ -16,7 +25,7 @@ let cachedClient: Anthropic | null = null
 let cachedKey = ''
 function getClient(): Anthropic {
   if (!cachedClient || cachedKey !== config.anthropicApiKey) {
-    cachedClient = new Anthropic({ apiKey: config.anthropicApiKey })
+    cachedClient = new Anthropic({ apiKey: config.anthropicApiKey, maxRetries: ANTHROPIC_MAX_RETRIES })
     cachedKey = config.anthropicApiKey
   }
   return cachedClient
@@ -38,7 +47,7 @@ const MAX_TOOL_ITERATIONS = 4
 
 export interface AgentTurnResult {
   fullText: string
-  tier: 'tier1' | 'tier2'
+  tier: 'tier1' | 'tier2' | 'blocked'
 }
 
 export interface ToolCallInfo {
@@ -82,10 +91,29 @@ export async function runAgentTurn(
   signal?: AbortSignal,
   hooks?: AgentTurnHooks
 ): Promise<AgentTurnResult> {
-  const tier = pickTier(userText)
+  // This is the reply the user is actively waiting on — "essential" — so
+  // protection only blocks it once a HARD limit is crossed, never a soft
+  // one (soft limits instead bias pickTier toward the cheapest model, just
+  // below). See the API-safeguards priority: hard limits stop nonessential
+  // spend without breaking local JARVIS functions — this gate is the only
+  // thing standing between a turn and an actual Anthropic call, so a tool
+  // like open_app/mute/self_test invoked outside this function (standalone,
+  // or via agent/localCommands.ts) never has to pass through it at all.
+  const gate = budgetManager.checkAnthropicCall({ essential: true })
+  if (!gate.allowed) {
+    const message = gate.reason ?? "I've hit my API budget limit for now, so I can't respond right now."
+    onSentence(message)
+    return { fullText: message, tier: 'blocked' }
+  }
+
+  const tier = pickTier(userText, { costPressure: budgetManager.costPressure() })
   const tierConfig = MODEL_TIERS[tier]
   const chunker = new SentenceChunker()
   const ctx = { platform: getPlatformControl(), context: contextManager }
+  const turnStartedAt = Date.now()
+  const budgetCfg = getBudgetConfig()
+  let turnTokensUsed = 0
+  let turnBudgetExceeded = false
 
   let messages: Anthropic.MessageParam[] = [
     ...history.map((t) => ({ role: t.role, content: t.content }) as Anthropic.MessageParam),
@@ -106,6 +134,7 @@ export async function runAgentTurn(
 
   let fullText = ''
   let firstTokenSeen = false
+  let lastStopReason: string | null = null
 
   for (let iteration = 0; iteration <= MAX_TOOL_ITERATIONS; iteration++) {
     const stream = getClient().messages.stream(
@@ -132,7 +161,34 @@ export async function runAgentTurn(
 
     const final = await stream.finalMessage()
 
-    if (final.stop_reason !== 'tool_use' || iteration === MAX_TOOL_ITERATIONS) break
+    // Real, API-reported counts — the actual hook point for accurate
+    // Anthropic usage tracking (as opposed to estimating from text length).
+    // Recorded every iteration, including the last one, so a multi-step
+    // tool-using turn is billed for all of it, not just the final reply.
+    usageTracker.recordAnthropicUsage({
+      model: tierConfig.model,
+      inputTokens: final.usage.input_tokens ?? 0,
+      outputTokens: final.usage.output_tokens,
+      cacheWriteTokens: final.usage.cache_creation_input_tokens ?? 0,
+      cacheReadTokens: final.usage.cache_read_input_tokens ?? 0
+    })
+    budgetManager.notifyUsageRecorded()
+    turnTokensUsed +=
+      (final.usage.input_tokens ?? 0) +
+      final.usage.output_tokens +
+      (final.usage.cache_creation_input_tokens ?? 0) +
+      (final.usage.cache_read_input_tokens ?? 0)
+
+    // Safety net for a runaway multi-step tool loop (see the
+    // long-agent-tasks priority) — bounds one turn's worst case regardless
+    // of MAX_TOOL_ITERATIONS, independent of the budget manager's
+    // daily/monthly $ limits above.
+    if (turnTokensUsed > budgetCfg.maxTurnTokens || Date.now() - turnStartedAt > budgetCfg.maxTurnWallMs) {
+      turnBudgetExceeded = true
+    }
+
+    lastStopReason = final.stop_reason
+    if (final.stop_reason !== 'tool_use' || iteration === MAX_TOOL_ITERATIONS || turnBudgetExceeded) break
 
     const toolUses = final.content.filter(
       (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use'
@@ -193,6 +249,16 @@ export async function runAgentTurn(
 
   const last = chunker.flush()
   if (last) onSentence(last)
+
+  // The loop was cut off mid-tool-use by the turn's own token/time budget
+  // (a runaway multi-step task, not a normal short reply that just
+  // finished) — say so, since otherwise the turn would end in silence with
+  // no text ever generated for this last step.
+  if (turnBudgetExceeded && lastStopReason === 'tool_use') {
+    const note = "I'm stopping here — this task hit its time or token budget for one turn."
+    fullText += (fullText ? ' ' : '') + note
+    onSentence(note)
+  }
 
   // Don't let a barge-in-interrupted (or otherwise cut-off) reply pollute
   // history with a truncated answer — only a turn that ran to completion
