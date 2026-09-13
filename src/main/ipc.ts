@@ -7,7 +7,7 @@ import { resolveConfirmation, requestConfirmation } from './tools/confirmation'
 import { getToolActivityHistory } from './tools/activity'
 import { usage } from './voice/usage'
 import { contextManager } from './context'
-import { config } from './config'
+import { config, getConfigDiagnostics, saveApiKeys } from './config'
 import { checkForUpdates, installUpdateAndRestart, getUpdateState } from './update/updater'
 
 let session: VoiceSession | null = null
@@ -140,6 +140,14 @@ export function registerIpcHandlers(): void {
     elevenlabs: Boolean(config.elevenLabsApiKey),
     deepgram: Boolean(config.deepgramApiKey)
   }))
+
+  // Full config-path diagnostics (dir/env-file/per-key presence — never
+  // values) and the first-run/API-config UI's save action. See config.ts.
+  ipcMain.handle('config:diagnostics', () => getConfigDiagnostics())
+  ipcMain.handle(
+    'config:save-keys',
+    (_event, keys: { anthropic?: string; deepgram?: string; elevenlabs?: string }) => saveApiKeys(keys)
+  )
 
   // Dev-only: lets automated/manual testing trigger the exact same code path
   // as the real hotkey, without needing OS Accessibility permission to

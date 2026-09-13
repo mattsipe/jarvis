@@ -104,6 +104,11 @@ const jarvisAPI = {
   getPersistentContext: (): Promise<unknown> => ipcRenderer.invoke('context:persistent'),
   getServicesStatus: (): Promise<{ anthropic: boolean; elevenlabs: boolean; deepgram: boolean }> =>
     ipcRenderer.invoke('config:services-status'),
+  /** Config-path diagnostics — config dir, which .env (if any) was found, and per-key presence. Never key values. */
+  getConfigDiagnostics: (): Promise<unknown> => ipcRenderer.invoke('config:diagnostics'),
+  /** First-run/API-config UI's save action — writes to the canonical .env, no restart required. */
+  saveApiKeys: (keys: { anthropic?: string; deepgram?: string; elevenlabs?: string }): Promise<unknown> =>
+    ipcRenderer.invoke('config:save-keys', keys),
 
   /** Dev-only — see ipc.ts's 'dev:test-agent-turn'. Not registered in production; rejects there. */
   devTestAgentTurn: (text: string): Promise<unknown> => ipcRenderer.invoke('dev:test-agent-turn', text),

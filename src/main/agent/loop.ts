@@ -8,7 +8,19 @@ import { toolRegistry, type RiskLevel, type ToolResult } from '../tools/registry
 import { getPlatformControl } from '../platform'
 import { contextManager } from '../context'
 
-const client = new Anthropic({ apiKey: config.anthropicApiKey })
+// Built lazily (and rebuilt if the key changes) rather than captured once at
+// module load — the key can now change at runtime via the Command Center's
+// API-config UI (see config.ts's saveApiKeys), and a client built with a
+// stale empty key would otherwise keep failing until a full app restart.
+let cachedClient: Anthropic | null = null
+let cachedKey = ''
+function getClient(): Anthropic {
+  if (!cachedClient || cachedKey !== config.anthropicApiKey) {
+    cachedClient = new Anthropic({ apiKey: config.anthropicApiKey })
+    cachedKey = config.anthropicApiKey
+  }
+  return cachedClient
+}
 
 interface ConversationTurn {
   role: 'user' | 'assistant'
@@ -80,7 +92,7 @@ export async function runAgentTurn(
   let firstTokenSeen = false
 
   for (let iteration = 0; iteration <= MAX_TOOL_ITERATIONS; iteration++) {
-    const stream = client.messages.stream(
+    const stream = getClient().messages.stream(
       {
         model: tierConfig.model,
         max_tokens: MAX_RESPONSE_TOKENS,
