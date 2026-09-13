@@ -79,9 +79,13 @@ function TickRing({ radius, count, length, opacity }: { radius: number; count: n
  */
 export default function Rings(): React.JSX.Element {
   const state = useHudStore((s) => s.state)
+  const presentationMode = useHudStore((s) => s.presentationMode)
   const expanded = isExpanded(state)
   const timing = RING_TIMING[state]
   const color = RING_COLOR[state]
+  // See hudStore's PresentationMode doc — 'restrained' is a seam for a future
+  // less screen-dominant mode, not wired to any auto-trigger yet.
+  const restrainedScale = presentationMode === 'restrained' ? 0.55 : 1
 
   const bracketOffset = 400
   const brackets: [number, number, Corner][] = [
@@ -108,7 +112,7 @@ export default function Rings(): React.JSX.Element {
         // @ts-expect-error -- custom property
         '--ring-color': color,
         opacity: expanded ? 1 : 0,
-        transform: `scale(${expanded ? 1 : 0.55})`,
+        transform: `scale(${expanded ? restrainedScale : 0.55})`,
         transition: 'opacity 700ms cubic-bezier(0.16, 1, 0.3, 1), transform 700ms cubic-bezier(0.16, 1, 0.3, 1)'
       }}
     >

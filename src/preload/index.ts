@@ -1,17 +1,42 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+
+function on<T>(channel: string, cb: (payload: T) => void): () => void {
+  const handler = (_event: IpcRendererEvent, payload: T): void => cb(payload)
+  ipcRenderer.on(channel, handler)
+  return () => ipcRenderer.removeListener(channel, handler)
+}
 
 /**
  * Narrow, typed surface exposed to the renderer. No API keys, no Node
  * access, no raw ipcRenderer — only the specific calls the HUD needs.
- * Extended per milestone (voice events in M2, tool activity in M3, ...).
+ * Extended per milestone (tool activity lands in M3).
  */
 const jarvisAPI = {
   /** Tell main whether the pointer is over interactive HUD content, so the
    *  click-through overlay can accept input only where it needs to. */
   setInteractive(interactive: boolean): void {
     ipcRenderer.send('hud:set-interactive', interactive)
-  }
+  },
+
+  // --- Voice loop (M2) ---
+  startListening(sampleRate: number): void {
+    ipcRenderer.send('voice:start', sampleRate)
+  },
+  sendAudioChunk(chunk: ArrayBuffer): void {
+    ipcRenderer.send('voice:audio-chunk', chunk)
+  },
+  onToggleListening: (cb: (payload: { listening: boolean }) => void) =>
+    on('voice:toggle', cb),
+  onTranscript: (cb: (payload: { text: string; isFinal: boolean }) => void) =>
+    on('voice:transcript', cb),
+  onAssistantText: (cb: (sentence: string) => void) => on('voice:assistant-text', cb),
+  onHudState: (cb: (state: string) => void) => on('hud:state', cb),
+  onTtsAudioChunk: (cb: (chunk: ArrayBuffer) => void) => on('voice:tts-audio-chunk', cb),
+  onTtsDone: (cb: () => void) => on('voice:tts-done', cb),
+  onAgentDone: (cb: (payload: { tier: string }) => void) => on('voice:agent-done', cb),
+  onVoiceError: (cb: (payload: { message: string; stage: string }) => void) =>
+    on('voice:error', cb)
 }
 
 if (process.contextIsolated) {

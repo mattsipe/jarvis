@@ -1,9 +1,8 @@
 import { app, globalShortcut, BrowserWindow } from 'electron'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { config, assertVoiceLoopConfigured } from './config'
 import { createOverlayWindow } from './window'
-import { registerIpcHandlers } from './ipc'
-
-const HOTKEY = process.env.JARVIS_HOTKEY || 'Control+Space'
+import { registerIpcHandlers, toggleListening } from './ipc'
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.weston.jarvis')
@@ -12,16 +11,22 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  try {
+    assertVoiceLoopConfigured()
+  } catch (err) {
+    console.warn((err as Error).message)
+    console.warn('[jarvis] Voice loop disabled until .env is filled in — the HUD still runs.')
+  }
+
   registerIpcHandlers()
   createOverlayWindow()
 
-  // M0/M1 stub: confirms the hotkey plumbing works end to end. Wired to the
-  // real STT capture pipeline in M2 (voice loop) — see plan Milestones.
-  const registered = globalShortcut.register(HOTKEY, () => {
-    if (is.dev) console.log(`[jarvis] hotkey ${HOTKEY} pressed`)
+  const registered = globalShortcut.register(config.hotkey, () => {
+    toggleListening()
+    if (is.dev) console.log(`[jarvis] hotkey ${config.hotkey} pressed`)
   })
   if (!registered) {
-    console.warn(`[jarvis] failed to register hotkey: ${HOTKEY}`)
+    console.warn(`[jarvis] failed to register hotkey: ${config.hotkey}`)
   }
 
   app.on('activate', () => {

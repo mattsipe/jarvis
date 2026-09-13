@@ -18,12 +18,16 @@
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "electron-vite build && electron-builder --mac",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:pipeline": "node scripts/test-voice-pipeline.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
+    "dotenv": "^17.4.2",
     "three": "^0.181.0",
+    "ws": "^8.21.3",
     "zod": "^3.25.0",
     "zustand": "^5.0.3"
   },
@@ -35,6 +39,7 @@
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@types/three": "^0.181.0",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.1.1",
     "electron": "^39.2.6",
     "electron-builder": "^26.0.12",

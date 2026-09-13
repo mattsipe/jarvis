@@ -42,6 +42,8 @@ export class JarvisCore {
   private geo = getCoreGeometry()
   private current = { ...CORE_PARAMS.ambient, color: CORE_PARAMS.ambient.color.clone() }
   private targetState: HudState = 'ambient'
+  private presentationScale = 1.0
+  private targetPresentationScale = 1.0
   private clock = { last: performance.now(), time: 0 }
   private rafId: number | null = null
   private externalAmplitude: number | null = null
@@ -101,9 +103,14 @@ export class JarvisCore {
     this.targetState = state
   }
 
-  /** M2 wires real mic/TTS amplitude in here; null falls back to a simulated pulse. */
+  /** Real mic/TTS amplitude comes in here (see amplitudeBus.ts); null falls back to a simulated pulse. */
   setExternalAmplitude(amplitude: number | null): void {
     this.externalAmplitude = amplitude
+  }
+
+  /** 'restrained' shrinks the expanded-state size without changing 'ambient' or the visual language. */
+  setPresentationMode(mode: 'cinematic' | 'restrained'): void {
+    this.targetPresentationScale = mode === 'restrained' ? 0.55 : 1.0
   }
 
   resize(width: number, height: number): void {
@@ -139,6 +146,7 @@ export class JarvisCore {
     const target = CORE_PARAMS[this.targetState]
     const c = this.current
     c.scale = damp(c.scale, target.scale, DAMPING.scale, dt)
+    this.presentationScale = damp(this.presentationScale, this.targetPresentationScale, DAMPING.scale, dt)
     c.noiseAmp = damp(c.noiseAmp, target.noiseAmp, DAMPING.noiseAmp, dt)
     c.noiseFreq = damp(c.noiseFreq, target.noiseFreq, DAMPING.noiseFreq, dt)
     c.rotSpeed = damp(c.rotSpeed, target.rotSpeed, DAMPING.rotSpeed, dt)
@@ -150,7 +158,9 @@ export class JarvisCore {
     c.expanded = damp(c.expanded, target.expanded, DAMPING.expanded, dt)
     c.color.lerp(target.color as Color, 1 - Math.exp(-DAMPING.color * dt))
 
-    this.group.scale.setScalar(c.scale)
+    // presentationScale only affects expanded states — ambient (expanded=0) is untouched.
+    const presentationMultiplier = 1 - c.expanded * (1 - this.presentationScale)
+    this.group.scale.setScalar(c.scale * presentationMultiplier)
     this.group.rotation.y += c.rotSpeed * dt
 
     const amplitude =
