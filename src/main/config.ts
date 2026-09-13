@@ -1,4 +1,21 @@
-import 'dotenv/config'
+import { app } from 'electron'
+import { join } from 'path'
+import dotenv from 'dotenv'
+import { is } from '@electron-toolkit/utils'
+
+// `dotenv/config`'s default behavior only ever looks for `.env` in
+// process.cwd() — fine in dev (cwd is the project root), but cwd in a
+// packaged app depends on how the user launched it and is never
+// guaranteed to be the install directory. In production this loads from
+// userData instead (the same stable, writable, per-user location used
+// for context.json/usage.json/home-location.local.json — see
+// context/store.ts and context/local.ts) — see the Windows test-build
+// notes for exactly where to place this file.
+if (is.dev) {
+  dotenv.config()
+} else {
+  dotenv.config({ path: join(app.getPath('userData'), '.env') })
+}
 
 function required(name: string): string {
   const v = process.env[name]
