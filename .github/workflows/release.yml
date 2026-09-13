@@ -31,6 +31,29 @@ jobs:
         with:
           node-version: 20
 
+      # electron-builder's GitHub publisher has a real race condition: when
+      # a release doesn't exist yet, its parallel per-file upload tasks each
+      # try to create it at once, and only one file reliably lands on the
+      # release that results (confirmed here — a v0.2.0-test.1 attempt
+      # published with only the .blockmap attached, missing the installer
+      # and the update-metadata yml entirely). Pre-creating the release
+      # (idempotent — skipped if it already exists) means electron-builder
+      # always hits the "already exists" path instead, which just uploads
+      # assets to it with no race.
+      - name: Ensure GitHub release exists
+        shell: bash
+        run: |
+          set -e
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v$VERSION"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists."
+          else
+            gh release create "$TAG" --prerelease --title "$VERSION" --notes "Automated build for $VERSION."
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - run: npm ci
 
       - run: npm run build
