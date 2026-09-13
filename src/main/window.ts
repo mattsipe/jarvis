@@ -1,15 +1,24 @@
-import { app, BrowserWindow, screen, shell } from 'electron'
+import { app, BrowserWindow, screen, shell, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { contextManager } from './context'
 
 let overlayWindow: BrowserWindow | null = null
 let commandCenterWindow: BrowserWindow | null = null
+let tray: Tray | null = null
 
-// The Command Center window hides on close (so the app keeps running in
-// Ambient Mode underneath) rather than being destroyed — except when the
-// whole app is actually quitting, tracked here so its 'close' handler can
-// tell the difference.
+/**
+ * Which surface is the intended, user-visible one right now. Ambient is an
+ * optional presentation mode, not a permanent overlay — see the lifecycle
+ * fix below. `null` means neither is currently shown (e.g. dismissed via
+ * the Command Center hotkey, recoverable from the tray).
+ */
+type Surface = 'command-center' | 'ambient' | null
+let activeSurface: Surface = null
+
+// Both windows hide instead of close (so the app keeps running) except when
+// the whole app is actually quitting, tracked here so their 'close' handlers
+// can tell the difference.
 let quitting = false
 app.on('before-quit', () => {
   quitting = true
@@ -18,15 +27,19 @@ app.on('before-quit', () => {
 /**
  * The overlay is a single fullscreen, transparent, frameless, always-on-top
  * window that never resizes or repositions. This is Ambient Mode — JARVIS's
- * living core over the desktop, small/unobtrusive at rest and expanding
- * while listening/thinking/speaking/acting. It is NOT the whole app; see
- * createCommandCenterWindow for the second first-class surface.
+ * living core over the desktop. It is created once (hidden) and its
+ * renderer is what actually owns the microphone/TTS playback (see
+ * App.tsx), so it must stay alive even while visually hidden — voice works
+ * the same whether the user is looking at Ambient or the Command Center.
+ * `backgroundThrottling: false` keeps its rAF-driven amplitude relay (see
+ * audio/playback.ts) running at full rate while hidden, so the Command
+ * Center's core stays reactive even when Ambient is never shown.
  *
- * Click-through is on by default so the desktop underneath stays usable;
- * the renderer tells us (via IPC, wired in ipc.ts) when the pointer is over
- * live HUD content so we can briefly accept input there.
+ * It is NEVER shown automatically — see showAmbient()/showCommandCenter().
  */
-export function createOverlayWindow(): BrowserWindow {
+function ensureOverlayWindow(): BrowserWindow {
+  if (overlayWindow && !overlayWindow.isDestroyed()) return overlayWindow
+
   const primaryDisplay = screen.getPrimaryDisplay()
   const { width, height } = primaryDisplay.bounds
 
@@ -50,7 +63,8 @@ export function createOverlayWindow(): BrowserWindow {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      backgroundThrottling: false
     }
   })
 
@@ -58,7 +72,9 @@ export function createOverlayWindow(): BrowserWindow {
   overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   overlayWindow.setIgnoreMouseEvents(true, { forward: true })
 
-  overlayWindow.on('ready-to-show', () => overlayWindow?.show())
+  overlayWindow.on('closed', () => {
+    overlayWindow = null
+  })
 
   overlayWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -78,6 +94,16 @@ export function getOverlayWindow(): BrowserWindow | null {
   return overlayWindow
 }
 
+/**
+ * Called once at startup — creates the (hidden) overlay window so its
+ * renderer, which owns the real microphone/TTS audio graph, is alive and
+ * ready before the user ever starts a conversation, regardless of which
+ * surface (Ambient or Command Center) they're actually looking at.
+ */
+export function ensureVoiceSurfaceExists(): void {
+  ensureOverlayWindow()
+}
+
 /** Renderer calls this (via preload) when the pointer enters/leaves interactive HUD content. */
 export function setInteractive(interactive: boolean): void {
   if (!overlayWindow) return
@@ -85,20 +111,14 @@ export function setInteractive(interactive: boolean): void {
 }
 
 /**
- * Command Center — the second first-class surface: a normal, resizable,
- * maximizable Electron window (not transparent/click-through/always-on-top
- * like the overlay). Built around the same Core/Rings/state/voice
- * infrastructure, laid out as panels (telemetry, transcript, active task,
- * recent actions, integrations, routines) around the central reactor.
- * Created lazily on first open; hidden (not destroyed) afterward so its
- * state persists and reopening is instant.
+ * Command Center — the default, primary surface: a normal, resizable,
+ * maximizable Electron window. Built around the same Core/Rings/state/voice
+ * infrastructure, laid out as panels around the central reactor. Created
+ * lazily on first open; hidden (not destroyed) afterward so its state
+ * persists and reopening is instant.
  */
-export function createCommandCenterWindow(): BrowserWindow {
-  if (commandCenterWindow && !commandCenterWindow.isDestroyed()) {
-    commandCenterWindow.show()
-    commandCenterWindow.focus()
-    return commandCenterWindow
-  }
+function ensureCommandCenterWindow(): BrowserWindow {
+  if (commandCenterWindow && !commandCenterWindow.isDestroyed()) return commandCenterWindow
 
   commandCenterWindow = new BrowserWindow({
     width: 1440,
@@ -116,17 +136,16 @@ export function createCommandCenterWindow(): BrowserWindow {
     }
   })
 
-  commandCenterWindow.on('ready-to-show', () => commandCenterWindow?.show())
   commandCenterWindow.on('show', () => contextManager.setCommandCenterOpen(true))
   commandCenterWindow.on('hide', () => contextManager.setCommandCenterOpen(false))
 
-  // Closing the window just returns to Ambient Mode — the app (and the
-  // ambient overlay/voice session) keeps running. Only actually destroyed
-  // when the whole app quits.
+  // Closing the window just hides it — the app (and the voice session)
+  // keeps running. Only actually destroyed when the whole app quits.
   commandCenterWindow.on('close', (event) => {
     if (quitting) return
     event.preventDefault()
     commandCenterWindow?.hide()
+    if (activeSurface === 'command-center') activeSurface = null
   })
   commandCenterWindow.on('closed', () => {
     commandCenterWindow = null
@@ -151,23 +170,61 @@ export function getCommandCenterWindow(): BrowserWindow | null {
   return commandCenterWindow
 }
 
-/** Ambient's launcher control and the global hotkey both call this. */
+/**
+ * Shows the Command Center and hides Ambient (if it was showing) — the two
+ * are mutually exclusive presentations of the one app, never both visible
+ * at once. This is the default surface at launch.
+ */
+export function showCommandCenter(): void {
+  const cc = ensureCommandCenterWindow()
+  cc.show()
+  cc.focus()
+  activeSurface = 'command-center'
+  if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.hide()
+}
+
+/** Shows Ambient Mode and hides the Command Center — an explicit, opt-in switch, never automatic. */
+export function showAmbient(): void {
+  const amb = ensureOverlayWindow()
+  amb.showInactive() // click-through/always-on-top presence — doesn't need to steal focus like a real window
+  activeSurface = 'ambient'
+  if (commandCenterWindow && !commandCenterWindow.isDestroyed()) commandCenterWindow.hide()
+}
+
+/** Global hotkey / tray — brings up the Command Center, or dismisses it if it's already the visible surface. */
 export function toggleCommandCenter(): void {
-  if (commandCenterWindow && !commandCenterWindow.isDestroyed() && commandCenterWindow.isVisible()) {
+  if (activeSurface === 'command-center' && commandCenterWindow?.isVisible()) {
     commandCenterWindow.hide()
+    activeSurface = null
   } else {
-    createCommandCenterWindow()
+    showCommandCenter()
   }
 }
 
-/**
- * Sends one IPC message to every live JARVIS surface (Ambient + Command
- * Center, whichever exist). This is what lets both windows reflect the
- * same single voice/agent/tool session rather than each owning its own
- * state — main is the one source of truth, the renderers just mirror it.
- */
+/** Sends one IPC message to every live JARVIS surface (Ambient + Command Center, whichever exist — shown or hidden). */
 export function broadcast(channel: string, payload: unknown): void {
   for (const win of [overlayWindow, commandCenterWindow]) {
     if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
   }
+}
+
+/**
+ * A tray icon is the only reliable way to get back to a visible surface
+ * (or to actually quit) once both windows are hidden — critical on
+ * Windows, which has no dock/menu-bar equivalent for a window-less app.
+ */
+export function createTray(): void {
+  const iconPath = join(__dirname, '../../resources/tray-icon-32.png')
+  const icon = nativeImage.createFromPath(iconPath)
+  tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon)
+  tray.setToolTip('JARVIS')
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Command Center', click: () => showCommandCenter() },
+      { label: 'Ambient Mode', click: () => showAmbient() },
+      { type: 'separator' },
+      { label: 'Quit JARVIS', click: () => app.quit() }
+    ])
+  )
+  tray.on('click', () => showCommandCenter())
 }

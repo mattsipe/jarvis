@@ -2,6 +2,31 @@ import { setAmplitude } from '../hud/core/amplitudeBus'
 
 export type CaptureMode = 'stream' | 'monitor'
 
+/**
+ * getUserMedia rejects with a generic-looking DOMException whose `name`
+ * is the only useful signal — turned into a plain-language reason so a
+ * mic failure is diagnosable instead of just "the core went red" (see the
+ * Windows voice-startup investigation: OS-level mic privacy settings and
+ * missing Electron permission handling are both real, platform-specific
+ * ways this fails silently otherwise).
+ */
+export function describeMicError(err: unknown): string {
+  const name = err instanceof DOMException ? err.name : ''
+  switch (name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      return 'Microphone access was denied. Check your OS privacy settings (Windows: Settings → Privacy → Microphone) and this app’s permission there, then try again.'
+    case 'NotFoundError':
+      return 'No microphone was found. Check that a recording device is connected and set as available.'
+    case 'NotReadableError':
+      return 'The microphone is in use by another application or the audio device failed to start.'
+    case 'OverconstrainedError':
+      return 'No microphone matched the requested audio settings.'
+    default:
+      return err instanceof Error ? err.message : String(err)
+  }
+}
+
 // VAD tuning for barge-in detection while in 'monitor' mode. Raw RMS
 // (pre `*4` HUD scaling), needs sustained frames above threshold to avoid
 // a single transient/glitch triggering it. echoCancellation (enabled

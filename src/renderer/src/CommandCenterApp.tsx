@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import Core from './hud/Core'
 import Rings from './hud/Rings'
+import ErrorBanner from './hud/ErrorBanner'
 import { useHudStore, type HudState } from './state/hudStore'
 import { useTranscriptStore } from './state/transcriptStore'
 import { useToolBridge } from './state/useToolBridge'
+import { useVoiceErrorStore } from './state/voiceErrorStore'
 import { setAmplitude } from './hud/core/amplitudeBus'
 import SystemTelemetryPanel from './commandcenter/SystemTelemetryPanel'
 import IntegrationsPanel from './commandcenter/IntegrationsPanel'
@@ -42,6 +44,8 @@ export default function CommandCenterApp(): React.JSX.Element {
       window.jarvis.onAmplitudeRelay((value) => setAmplitude(value)),
       window.jarvis.onVoiceError(({ message, stage }) => {
         console.error(`[jarvis] voice error (${stage}):`, message)
+        useHudStore.getState().setState('error')
+        useVoiceErrorStore.getState().setError(message, stage)
       })
     ]
     return () => unsubscribers.forEach((unsub) => unsub())
@@ -73,11 +77,12 @@ export default function CommandCenterApp(): React.JSX.Element {
           <button onClick={() => window.jarvis.toggleVoiceSession()} style={headerButtonStyle(sessionActive)}>
             {sessionActive ? 'End Conversation' : 'Start Conversation'}
           </button>
-          <button onClick={() => window.jarvis.toggleCommandCenter()} style={headerButtonStyle(false)}>
-            Back to Ambient
+          <button onClick={() => window.jarvis.switchToAmbient()} style={headerButtonStyle(false)}>
+            Ambient Mode
           </button>
         </div>
       </header>
+      <ErrorBanner />
 
       <div
         style={{

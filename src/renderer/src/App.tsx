@@ -5,11 +5,13 @@ import Transcript from './hud/Transcript'
 import DevStateSwitcher from './hud/DevStateSwitcher'
 import ToolConfirm from './hud/ToolConfirm'
 import CommandCenterLauncher from './hud/CommandCenterLauncher'
+import ErrorBanner from './hud/ErrorBanner'
 import { useHudStore, type HudState } from './state/hudStore'
 import { useTranscriptStore } from './state/transcriptStore'
 import { useToolBridge } from './state/useToolBridge'
+import { useVoiceErrorStore } from './state/voiceErrorStore'
 import { subscribeAmplitude } from './hud/core/amplitudeBus'
-import { MicCapture } from './audio/capture'
+import { MicCapture, describeMicError } from './audio/capture'
 import { TtsPlayback } from './audio/playback'
 
 const HUD_STATES: readonly HudState[] = [
@@ -101,8 +103,9 @@ export default function App(): React.JSX.Element {
             beginListening(mic)
           })
           .catch((err) => {
+            const message = describeMicError(err)
             console.error('[jarvis] microphone capture failed:', err)
-            useHudStore.getState().setState('error')
+            window.jarvis.reportVoiceError({ message, stage: 'mic' })
             micRef.current = null
           })
       }),
@@ -157,6 +160,7 @@ export default function App(): React.JSX.Element {
       window.jarvis.onVoiceError(({ message, stage }) => {
         console.error(`[jarvis] voice error (${stage}):`, message)
         useHudStore.getState().setState('error')
+        useVoiceErrorStore.getState().setError(message, stage)
       })
     ]
 
@@ -172,6 +176,7 @@ export default function App(): React.JSX.Element {
       <Core />
       <Transcript />
       <ToolConfirm />
+      <ErrorBanner />
       <CommandCenterLauncher />
       {import.meta.env.DEV && <DevStateSwitcher />}
     </div>

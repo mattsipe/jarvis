@@ -9,7 +9,7 @@ export default function CommandCenterLauncher(): React.JSX.Element {
     <button
       onMouseEnter={() => window.jarvis.setInteractive(true)}
       onMouseLeave={() => window.jarvis.setInteractive(false)}
-      onClick={() => window.jarvis.toggleCommandCenter()}
+      onClick={() => window.jarvis.switchToCommandCenter()}
       style={{
         position: 'absolute',
         right: 24,

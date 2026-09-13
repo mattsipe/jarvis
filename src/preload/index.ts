@@ -68,12 +68,23 @@ const jarvisAPI = {
   },
   onAmplitudeRelay: (cb: (value: number | null) => void) => on('hud:amplitude-relay', cb),
 
-  // --- Command Center (two-mode UI) ---
+  // --- Command Center / Ambient (two-mode UI) ---
   toggleCommandCenter(): void {
     ipcRenderer.send('command-center:toggle')
   },
+  /** Explicit switches — Ambient and Command Center are mutually exclusive, never both visible. */
+  switchToCommandCenter(): void {
+    ipcRenderer.send('surface:show-command-center')
+  },
+  switchToAmbient(): void {
+    ipcRenderer.send('surface:show-ambient')
+  },
   toggleVoiceSession(): void {
     ipcRenderer.send('voice:toggle-session')
+  },
+  /** A renderer-side voice failure (e.g. getUserMedia rejecting) with no session to report through. */
+  reportVoiceError(payload: { message: string; stage: string }): void {
+    ipcRenderer.send('voice:renderer-error', payload)
   },
 
   // --- Tool execution / risk gating (M3) ---

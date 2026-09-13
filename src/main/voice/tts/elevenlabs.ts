@@ -1,6 +1,8 @@
 import { EventEmitter } from 'events'
 import WebSocket from 'ws'
+import type { IncomingMessage } from 'http'
 import { config } from '../../config'
+import { logError } from '../../logger'
 
 export declare interface ElevenLabsTts {
   on(event: 'audio', listener: (chunk: Buffer) => void): this
@@ -56,8 +58,38 @@ export class ElevenLabsTts extends EventEmitter {
       }
     })
 
-    this.ws.on('error', (err: Error) => this.emit('error', err))
-    this.ws.on('close', () => this.emitDoneOnce())
+    this.ws.on('error', (err: Error) => {
+      logError('elevenlabs', err.message)
+      this.emit('error', err)
+    })
+
+    // Same gap as Deepgram's — a rejected handshake (bad key/quota) fires
+    // 'unexpected-response', not 'error'. Previously this meant an auth
+    // failure looked exactly like a normal, successful, silent reply.
+    this.ws.on('unexpected-response', (_req, res: IncomingMessage) => {
+      const status = res.statusCode
+      const message =
+        status === 401
+          ? 'ElevenLabs rejected the connection — check ELEVENLABS_API_KEY.'
+          : status === 429
+            ? 'ElevenLabs rate limit or quota exceeded.'
+            : `ElevenLabs connection failed (HTTP ${status}).`
+      logError('elevenlabs', `unexpected-response ${status}`)
+      this.emit('error', new Error(message))
+      res.resume()
+    })
+
+    this.ws.on('close', (code) => {
+      // A close before ever opening successfully is a failure, not a
+      // normal end-of-reply — otherwise it's silently treated as "done"
+      // with zero audio ever having played.
+      if (!this.ready && code !== 1000) {
+        logError('elevenlabs', `closed before ready, code ${code}`)
+        this.emit('error', new Error(`ElevenLabs connection closed unexpectedly (code ${code}).`))
+        return
+      }
+      this.emitDoneOnce()
+    })
   }
 
   private emitDoneOnce(): void {

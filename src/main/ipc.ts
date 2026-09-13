@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
 import { is } from '@electron-toolkit/utils'
-import { setInteractive, getOverlayWindow, toggleCommandCenter, broadcast } from './window'
+import { setInteractive, getOverlayWindow, toggleCommandCenter, showCommandCenter, showAmbient, broadcast } from './window'
 import { VoiceSession } from './voice/session'
 import { runAgentTurn } from './agent/loop'
 import { resolveConfirmation, requestConfirmation } from './tools/confirmation'
@@ -88,14 +88,36 @@ export function registerIpcHandlers(): void {
     resolveConfirmation(payload.id, payload.approved)
   })
 
-  // Command Center — opened/closed from Ambient's launcher control or the global hotkey.
+  // Command Center hotkey — dismisses it if already visible, otherwise shows it (and hides Ambient).
   ipcMain.on('command-center:toggle', () => {
     toggleCommandCenter()
   })
 
+  // Explicit surface switches (Ambient and Command Center are mutually
+  // exclusive presentations of the one app — see window.ts).
+  ipcMain.on('surface:show-command-center', () => showCommandCenter())
+  ipcMain.on('surface:show-ambient', () => showAmbient())
+
   // Same start/stop-conversation action as the global hotkey, triggerable from either HUD surface's UI.
   ipcMain.on('voice:toggle-session', () => {
     toggleSession()
+  })
+
+  // A renderer-side failure (e.g. getUserMedia rejecting) has no session
+  // to report through — it re-broadcasts via the same 'voice:error'
+  // channel main itself uses, so both HUD surfaces show it consistently.
+  // A mic-stage failure also ends the session on main's side — otherwise
+  // `sessionActive` stays stuck true with no way for audio to ever reach
+  // it, and the next hotkey/button press would try to *end* a session
+  // that never really started instead of starting a fresh one.
+  ipcMain.on('voice:renderer-error', (_event, payload: { message: string; stage: string }) => {
+    console.error(`[jarvis] renderer voice error (${payload.stage}):`, payload.message)
+    broadcast('voice:error', payload)
+    if (payload.stage === 'mic' && sessionActive) {
+      session?.endSession()
+      sessionActive = false
+      session = null
+    }
   })
 
   // One-shot queries the Command Center makes on open, rather than

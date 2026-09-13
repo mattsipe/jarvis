@@ -2,6 +2,15 @@ import { app } from 'electron'
 import { join } from 'path'
 import dotenv from 'dotenv'
 import { is } from '@electron-toolkit/utils'
+import { logInfo, getLogFilePath } from './logger'
+
+// Force a deterministic app name BEFORE any app.getPath() call below —
+// otherwise userData's folder name depends on how Electron/electron-builder
+// resolved the app's display name for this particular build, which isn't
+// guaranteed identical across dev/packaged/platform. This must happen here,
+// at the top of the first module that touches app.getPath, since import
+// side effects run before any of index.ts's own top-level statements.
+app.setName('jarvis')
 
 // `dotenv/config`'s default behavior only ever looks for `.env` in
 // process.cwd() — fine in dev (cwd is the project root), but cwd in a
@@ -11,11 +20,17 @@ import { is } from '@electron-toolkit/utils'
 // for context.json/usage.json/home-location.local.json — see
 // context/store.ts and context/local.ts) — see the Windows test-build
 // notes for exactly where to place this file.
-if (is.dev) {
-  dotenv.config()
-} else {
-  dotenv.config({ path: join(app.getPath('userData'), '.env') })
-}
+const envPath = is.dev ? undefined : join(app.getPath('userData'), '.env')
+dotenv.config(envPath ? { path: envPath } : undefined)
+
+// Never logs key values — only presence — but this is the single most
+// useful line for diagnosing "voice doesn't work" on a machine we can't
+// see: it says exactly where JARVIS looked and what it found. Written to
+// a log file too, since a packaged Windows build has no visible console.
+logInfo(
+  'config',
+  `env loaded from ${envPath ?? 'project root (dev)'} — ANTHROPIC_API_KEY:${Boolean(process.env.ANTHROPIC_API_KEY)} ELEVENLABS_API_KEY:${Boolean(process.env.ELEVENLABS_API_KEY)} DEEPGRAM_API_KEY:${Boolean(process.env.DEEPGRAM_API_KEY)} — log file: ${getLogFilePath()}`
+)
 
 function required(name: string): string {
   const v = process.env[name]

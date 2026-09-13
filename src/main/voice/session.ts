@@ -78,7 +78,19 @@ export class VoiceSession {
     })
     stt.on('error', (err) => {
       if (this.utteranceFinished) return
+      // An STT-connection failure (bad key, network/firewall block, etc.)
+      // is unrecoverable for this session — previously this only sent the
+      // error and left the session dangling (mic still open, nothing ever
+      // transcribing again). End it cleanly instead so the next
+      // hotkey/button press starts fresh rather than trying to *end* a
+      // session that never really worked. hud:state stays on 'error'
+      // (its own auto-revert timer returns to ambient — see hudStore.ts)
+      // instead of endSession()'s usual immediate 'ambient' broadcast,
+      // so the error is actually visible for a moment.
+      this.utteranceFinished = true
       this.send('voice:error', { message: err.message, stage: 'stt' })
+      this.send('hud:state', 'error')
+      this.terminate()
     })
     stt.start(sampleRate)
     usage.startSttStream()
@@ -114,6 +126,13 @@ export class VoiceSession {
   /** Hotkey pressed again — ends the session immediately, whatever phase it's in. */
   endSession(): void {
     if (this.ended) return
+    this.terminate()
+    this.send('hud:state', 'ambient')
+  }
+
+  /** Shared teardown for both a normal end and an unrecoverable error — see stt.on('error') above. */
+  private terminate(): void {
+    if (this.ended) return
     this.ended = true
     this.turnId++
     this.clearInactivityTimer()
@@ -124,7 +143,6 @@ export class VoiceSession {
     this.activeTts?.close()
     this.activeTts = null
     contextManager.setVoiceSessionActive(false)
-    this.send('hud:state', 'ambient')
     this.send('voice:session-ended', null)
     this.onEnded()
   }

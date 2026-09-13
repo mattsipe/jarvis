@@ -1,7 +1,7 @@
-import { app, globalShortcut, BrowserWindow } from 'electron'
+import { app, globalShortcut, session } from 'electron'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { config, assertVoiceLoopConfigured } from './config'
-import { createOverlayWindow, toggleCommandCenter } from './window'
+import { showCommandCenter, toggleCommandCenter, ensureVoiceSurfaceExists, createTray } from './window'
 import { registerIpcHandlers, toggleSession } from './ipc'
 import { registerBuiltInTools } from './tools'
 
@@ -12,6 +12,19 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  // Chromium's default is to deny 'media' (microphone/camera) permission
+  // requests unless a handler explicitly allows them. This app only ever
+  // loads its own bundled HTML (never third-party content), so it's safe
+  // to always allow — without this, getUserMedia can fail silently on some
+  // platforms/builds with no OS-level prompt at all (see the Windows
+  // voice-startup investigation: this was a real, confirmed gap).
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permission === 'media')
+  })
+  // Belt-and-suspenders: some permission types are gated by this
+  // synchronous check independently of the async request handler above.
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => permission === 'media')
+
   try {
     assertVoiceLoopConfigured()
   } catch (err) {
@@ -21,7 +34,17 @@ app.whenReady().then(() => {
 
   registerBuiltInTools()
   registerIpcHandlers()
-  createOverlayWindow()
+  createTray()
+
+  // Ambient's renderer owns the real audio graph regardless of which
+  // surface is visually active — create it (hidden) up front so voice
+  // works immediately even if the user never explicitly opens Ambient Mode.
+  ensureVoiceSurfaceExists()
+
+  // Command Center is the default, primary surface — Ambient is opt-in
+  // (see window.ts's showAmbient/showCommandCenter: the two are mutually
+  // exclusive, never both visible at once).
+  showCommandCenter()
 
   const registered = globalShortcut.register(config.hotkey, () => {
     toggleSession()
@@ -38,17 +61,20 @@ app.whenReady().then(() => {
     console.warn(`[jarvis] failed to register Command Center hotkey: ${config.commandCenterHotkey}`)
   }
 
+  // macOS dock icon click with no visible window — bring back the primary surface.
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createOverlayWindow()
-    }
+    showCommandCenter()
   })
 })
 
-app.on('will-quit', () => {
+app.on('before-quit', () => {
   globalShortcut.unregisterAll()
 })
 
+// Both windows now hide rather than close on their own 'close' handler, so
+// this effectively never fires from normal use — quitting is explicit, via
+// the tray's "Quit JARVIS". Kept as a safety net in case both windows are
+// ever destroyed some other way.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
