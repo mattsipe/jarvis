@@ -48,6 +48,7 @@ export default function App(): React.JSX.Element {
       const mic = micRef.current
       if (!mic) return
       ttsRef.current?.abort()
+      ttsRef.current = null // abort() permanently mutes this instance — drop it so 'thinking' creates a fresh one
       beginListening(mic)
       window.jarvis.notifyBargeIn(mic.sampleRate, preroll)
     }
