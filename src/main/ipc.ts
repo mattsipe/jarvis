@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import { setInteractive, getOverlayWindow, toggleCommandCenter, broadcast } from './window'
 import { VoiceSession } from './voice/session'
+import { runAgentTurn } from './agent/loop'
 import { resolveConfirmation, requestConfirmation } from './tools/confirmation'
 import { getToolActivityHistory } from './tools/activity'
 import { usage } from './voice/usage'
@@ -121,7 +122,6 @@ export function registerIpcHandlers(): void {
     // bypassing STT/TTS entirely — useful for testing tool-calling without a
     // real mic. Never registered outside development.
     ipcMain.handle('dev:test-agent-turn', async (_event, text: string) => {
-      const { runAgentTurn } = await import('./agent/loop')
       const sentences: string[] = []
       const result = await runAgentTurn(text, (s) => sentences.push(s), undefined, {
         onToolStart: (call) => console.log('[jarvis][dev] tool start:', call.name, call.risk, call.input),
