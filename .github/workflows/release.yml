@@ -40,8 +40,23 @@ jobs:
       # self-contained so the target PC never needs a .NET runtime
       # installed. electron-builder.yml's win.extraResources picks up the
       # exact output path below.
+      #
+      # `-o` sends the actual publish output somewhere electron-builder
+      # never scans as app source; the `rm -rf` afterward is the real
+      # fix, though — `dotnet publish --self-contained` also populates the
+      # ordinary bin/obj build directories *inside* native/jarvis-helper
+      # with the full self-contained runtime (confirmed by directly
+      # inspecting a shipped release's app.asar: ~113MB of framework DLLs
+      # under native/jarvis-helper/bin/... were ending up in the package
+      # despite multiple attempts at excluding native/ via electron-builder
+      # `files` patterns). Deleting bin/obj here means there is nothing
+      # left under native/ for any packaging-glob subtlety to leak in the
+      # first place, regardless of how electron-builder's matcher behaves.
       - name: Publish jarvis-helper.exe
-        run: dotnet publish native/jarvis-helper/jarvis-helper.csproj -r win-x64 --self-contained true -c Release
+        shell: bash
+        run: |
+          dotnet publish native/jarvis-helper/jarvis-helper.csproj -r win-x64 --self-contained true -c Release -o native/jarvis-helper/publish
+          rm -rf native/jarvis-helper/bin native/jarvis-helper/obj
 
       # electron-builder's GitHub publisher has a real race condition: when
       # a release doesn't exist yet, its parallel per-file upload tasks each

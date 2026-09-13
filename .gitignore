@@ -8,3 +8,4 @@ release
 *.local
 native/jarvis-helper/bin
 native/jarvis-helper/obj
+native/jarvis-helper/publish
