@@ -9,17 +9,32 @@ files:
   - '!{.eslintignore,.eslintrc.cjs,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  # Placed via extraResources below instead — a real file outside the asar
+  # archive, like jarvis-helper.exe, rather than inside it (see that
+  # extraResources entry's comment for why: the ONNX runtime's native
+  # addon does its own file I/O on whatever path resourcePath() computes,
+  # which fails if it's still an asar-virtual path — confirmed by an
+  # actual packaged smoke test, not assumed).
+  - '!resources/wakeword/**'
+extraResources:
+  # presence/wakeword.ts's local openWakeWord engine — see that file's
+  # resourcePath(). Every platform needs these (mac for dev/testing too,
+  # not just the Windows release), so this is a top-level entry rather
+  # than scoped under `win:` the way jarvis-helper.exe is.
+  - from: resources/wakeword
+    to: wakeword
 asarUnpack:
   - resources/**
-  # @picovoice/porcupine-node (presence/wakeword.ts) resolves its native
-  # .node addon and .pv/.ppn model/keyword files with __dirname-relative
-  # paths that get passed into the native library's own file I/O — that
-  # native code does its own fopen() on the resulting string, which fails
-  # if the path still points inside the (virtual, compressed) asar archive.
-  # Unpacking the whole package tree is the standard fix: Electron's
-  # asar-unpack redirect then makes __dirname resolve to the real files on
-  # disk for every file in this package, not just the .node itself.
-  - '**/node_modules/@picovoice/**'
+  # onnxruntime-node (presence/wakeword.ts, the local openWakeWord engine)
+  # ships a native .node addon that loads a sibling onnxruntime.dll via its
+  # own internal (non-Node) library-loading code — that native loader has
+  # no idea what an asar archive is, so it fails if the path it computes
+  # still points inside the (virtual, compressed) archive. This is the
+  # same class of bug hit and fixed for the previous Picovoice-based
+  # engine; unpacking the whole package tree is the standard fix, since
+  # Electron's asar-unpack redirect then makes every file in it resolve to
+  # a real path on disk.
+  - '**/node_modules/onnxruntime-node/**'
 win:
   executableName: jarvis
   target:
@@ -33,6 +48,21 @@ win:
   extraResources:
     - from: native/jarvis-helper/bin/Release/net8.0-windows/win-x64/publish/jarvis-helper.exe
       to: jarvis-helper.exe
+  # onnxruntime-node ships every platform/arch's binaries in one tarball
+  # (~280MB unpacked) plus DirectML's GPU-acceleration DLLs, neither of
+  # which this Windows build needs: only win32/x64 is ever loaded here, and
+  # the wake-word models are deliberately run on the 'cpu' execution
+  # provider only (see wakeword.ts) — small enough that GPU acceleration
+  # buys nothing but ~38MB of installer size for DLLs that are never
+  # opened. Scoped to `win:` (rather than the root `files` list) so a local
+  # macOS dev build still gets its own platform's binaries untouched.
+  files:
+    - '!node_modules/onnxruntime-node/bin/napi-v6/darwin/**'
+    - '!node_modules/onnxruntime-node/bin/napi-v6/linux/**'
+    - '!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**'
+    - '!node_modules/onnxruntime-node/bin/napi-v6/win32/x64/DirectML.dll'
+    - '!node_modules/onnxruntime-node/bin/napi-v6/win32/x64/dxcompiler.dll'
+    - '!node_modules/onnxruntime-node/bin/napi-v6/win32/x64/dxil.dll'
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}

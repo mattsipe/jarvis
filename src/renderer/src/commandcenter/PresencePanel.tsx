@@ -8,7 +8,6 @@ interface PresenceStatus {
   muted: boolean
   wakeEngineReady: boolean
   wakeEngineError: string | null
-  accessKeyConfigured: boolean
   micActive: boolean
   cloudAudioActive: boolean
   wakeCount: number
@@ -54,9 +53,20 @@ function toggleStyle(active: boolean): React.CSSProperties {
  */
 export default function PresencePanel(): React.JSX.Element {
   const [status, setStatus] = useState<PresenceStatus | null>(null)
+  const [retrying, setRetrying] = useState(false)
 
   const refresh = (): void => {
     window.jarvis.getPresenceStatus().then((s) => setStatus(s as PresenceStatus))
+  }
+
+  const retryEngine = async (): Promise<void> => {
+    setRetrying(true)
+    try {
+      const s = await window.jarvis.retryPresenceEngine()
+      setStatus(s as PresenceStatus)
+    } finally {
+      setRetrying(false)
+    }
   }
 
   useEffect(() => {
@@ -80,13 +90,13 @@ export default function PresencePanel(): React.JSX.Element {
         <span style={{ fontSize: 12 }}>{STATE_LABEL[status.state]}</span>
       </div>
 
-      <Row label="Wake-word engine" value={status.wakeEngineReady ? 'Ready' : 'Not available'} />
-      {!status.wakeEngineReady && status.wakeEngineError && (
-        <div style={{ fontSize: 10, opacity: 0.6, marginTop: 2 }}>{status.wakeEngineError}</div>
-      )}
-      {!status.accessKeyConfigured && (
-        <div style={{ fontSize: 10, opacity: 0.6, marginTop: 2 }}>
-          Add a free Picovoice AccessKey in Integrations to enable wake word.
+      <Row label="Wake-word engine" value={status.wakeEngineReady ? 'Ready (local, offline)' : 'Not available'} />
+      {!status.wakeEngineReady && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
+          {status.wakeEngineError && <div style={{ fontSize: 10, opacity: 0.6, flex: 1 }}>{status.wakeEngineError}</div>}
+          <button onClick={retryEngine} disabled={retrying} style={toggleStyle(false)}>
+            {retrying ? 'Retrying…' : 'Retry'}
+          </button>
         </div>
       )}
       <Row label="Mic (wake-word)" value={status.micActive ? 'Listening' : 'Off'} />

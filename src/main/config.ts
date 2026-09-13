@@ -135,7 +135,7 @@ loadEnv()
 // Also surfaced live in Command Center — see getConfigDiagnostics below.
 logInfo(
   'config',
-  `configDir=${CONFIG_DIR ?? 'project root (dev)'} envFile=${envFileUsed ?? 'none found'} migratedFrom=${migratedFrom ?? 'n/a'} — ANTHROPIC_API_KEY:${Boolean(process.env.ANTHROPIC_API_KEY)} ELEVENLABS_API_KEY:${Boolean(process.env.ELEVENLABS_API_KEY)} DEEPGRAM_API_KEY:${Boolean(process.env.DEEPGRAM_API_KEY)} PICOVOICE_ACCESS_KEY:${Boolean(process.env.PICOVOICE_ACCESS_KEY)} — log file: ${getLogFilePath()}`
+  `configDir=${CONFIG_DIR ?? 'project root (dev)'} envFile=${envFileUsed ?? 'none found'} migratedFrom=${migratedFrom ?? 'n/a'} — ANTHROPIC_API_KEY:${Boolean(process.env.ANTHROPIC_API_KEY)} ELEVENLABS_API_KEY:${Boolean(process.env.ELEVENLABS_API_KEY)} DEEPGRAM_API_KEY:${Boolean(process.env.DEEPGRAM_API_KEY)} — log file: ${getLogFilePath()}`
 )
 
 function required(name: string): string {
@@ -153,10 +153,12 @@ export const config = {
   elevenLabsApiKey: process.env.ELEVENLABS_API_KEY || '',
   elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID || '2eG0V12z6Hg7luZwRG2V',
   deepgramApiKey: process.env.DEEPGRAM_API_KEY || '',
-  /** Free key from Picovoice Console — powers local wake-word detection (presence/wakeword.ts). Optional: Presence just stays disabled without one. */
-  picovoiceAccessKey: process.env.PICOVOICE_ACCESS_KEY || '',
-  /** Porcupine sensitivity, 0-1 — higher catches more true positives at the cost of more false wakes. */
+  /** 0-1 — higher catches more true positives at the cost of more false wakes. See presence/wakewordMath.ts's sensitivityToThreshold. */
   wakeWordSensitivity: process.env.JARVIS_WAKE_WORD_SENSITIVITY ? parseFloat(process.env.JARVIS_WAKE_WORD_SENSITIVITY) : 0.5,
+  /** How many consecutive 80ms frames must clear the threshold before a wake is reported — the false-positive-protection knob. */
+  wakeWordConsecutiveFrames: process.env.JARVIS_WAKE_WORD_CONSECUTIVE_FRAMES
+    ? parseInt(process.env.JARVIS_WAKE_WORD_CONSECUTIVE_FRAMES, 10)
+    : 2,
   sttProvider: (process.env.STT_PROVIDER as 'deepgram' | 'whisper') || 'deepgram',
   hotkey: process.env.JARVIS_HOTKEY || 'Control+Space',
   commandCenterHotkey: process.env.JARVIS_COMMAND_CENTER_HOTKEY || 'Control+Shift+Space',
@@ -188,7 +190,6 @@ export interface ConfigDiagnostics {
   claudeKeyLoaded: boolean
   deepgramKeyLoaded: boolean
   elevenLabsKeyLoaded: boolean
-  picovoiceKeyLoaded: boolean
 }
 
 /** Powers the Command Center's Integrations diagnostics — never returns key values, only presence/paths. */
@@ -203,8 +204,7 @@ export function getConfigDiagnostics(): ConfigDiagnostics {
     migratedFrom,
     claudeKeyLoaded: Boolean(config.anthropicApiKey),
     deepgramKeyLoaded: Boolean(config.deepgramApiKey),
-    elevenLabsKeyLoaded: Boolean(config.elevenLabsApiKey),
-    picovoiceKeyLoaded: Boolean(config.picovoiceAccessKey)
+    elevenLabsKeyLoaded: Boolean(config.elevenLabsApiKey)
   }
 }
 
@@ -217,7 +217,7 @@ export function getConfigDiagnostics(): ConfigDiagnostics {
  * updates the live `config` object immediately so already-running code
  * picks the new values up without an app restart.
  */
-export function saveApiKeys(keys: { anthropic?: string; deepgram?: string; elevenlabs?: string; picovoice?: string }): ConfigDiagnostics {
+export function saveApiKeys(keys: { anthropic?: string; deepgram?: string; elevenlabs?: string }): ConfigDiagnostics {
   if (is.dev || !CONFIG_DIR || !ENV_PATH) {
     throw new Error('Saving API keys from the UI is only supported in a packaged build — edit the project .env in dev.')
   }
@@ -228,7 +228,6 @@ export function saveApiKeys(keys: { anthropic?: string; deepgram?: string; eleve
   if (keys.anthropic !== undefined) existing.ANTHROPIC_API_KEY = keys.anthropic.trim()
   if (keys.deepgram !== undefined) existing.DEEPGRAM_API_KEY = keys.deepgram.trim()
   if (keys.elevenlabs !== undefined) existing.ELEVENLABS_API_KEY = keys.elevenlabs.trim()
-  if (keys.picovoice !== undefined) existing.PICOVOICE_ACCESS_KEY = keys.picovoice.trim()
 
   const body = Object.entries(existing)
     .map(([k, v]) => `${k}=${v}`)
@@ -241,7 +240,6 @@ export function saveApiKeys(keys: { anthropic?: string; deepgram?: string; eleve
   config.anthropicApiKey = process.env.ANTHROPIC_API_KEY || ''
   config.deepgramApiKey = process.env.DEEPGRAM_API_KEY || ''
   config.elevenLabsApiKey = process.env.ELEVENLABS_API_KEY || ''
-  config.picovoiceAccessKey = process.env.PICOVOICE_ACCESS_KEY || ''
 
   logInfo('config', `API keys saved via Command Center to ${ENV_PATH}`)
   return getConfigDiagnostics()

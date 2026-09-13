@@ -108,7 +108,7 @@ const jarvisAPI = {
   /** Config-path diagnostics — config dir, which .env (if any) was found, and per-key presence. Never key values. */
   getConfigDiagnostics: (): Promise<unknown> => ipcRenderer.invoke('config:diagnostics'),
   /** First-run/API-config UI's save action — writes to the canonical .env, no restart required. */
-  saveApiKeys: (keys: { anthropic?: string; deepgram?: string; elevenlabs?: string; picovoice?: string }): Promise<unknown> =>
+  saveApiKeys: (keys: { anthropic?: string; deepgram?: string; elevenlabs?: string }): Promise<unknown> =>
     ipcRenderer.invoke('config:save-keys', keys),
 
   // --- Memory (Command Center Memory panel) ---
@@ -129,6 +129,8 @@ const jarvisAPI = {
   setPresenceLaunchAtLogin: (launchAtLogin: boolean): Promise<unknown> => ipcRenderer.invoke('presence:set-launch-at-login', launchAtLogin),
   setPresenceMuted: (muted: boolean): Promise<unknown> => ipcRenderer.invoke('presence:set-muted', muted),
   toggleMuted: (): Promise<unknown> => ipcRenderer.invoke('presence:toggle-muted'),
+  /** Only useful if the wake-word engine failed to load (e.g. a corrupted install) — there's no key/account setup step to retry after anymore. */
+  retryPresenceEngine: (): Promise<unknown> => ipcRenderer.invoke('presence:retry-engine'),
   /** Broadcast on every Presence state/config change — Ambient uses this to start/stop its own wake-word mic capture; Command Center uses it for the Presence panel. */
   onPresenceState: (cb: (status: Record<string, unknown>) => void) => on('presence:state', cb),
   /** Continuous PCM16 stream from Ambient's always-on wake-word mic — see audio/presenceCapture.ts. Only ever sent while Presence is 'sleeping'. */

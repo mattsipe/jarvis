@@ -17,7 +17,6 @@ interface ConfigDiagnostics {
   claudeKeyLoaded: boolean
   deepgramKeyLoaded: boolean
   elevenLabsKeyLoaded: boolean
-  picovoiceKeyLoaded: boolean
 }
 
 function statusLabel(ok: boolean): string {
@@ -47,7 +46,7 @@ export default function IntegrationsPanel(): React.JSX.Element {
   const [diagnostics, setDiagnostics] = useState<ConfigDiagnostics | null>(null)
   const [editing, setEditing] = useState(false)
   const [autoOpened, setAutoOpened] = useState(false)
-  const [form, setForm] = useState({ anthropic: '', deepgram: '', elevenlabs: '', picovoice: '' })
+  const [form, setForm] = useState({ anthropic: '', deepgram: '', elevenlabs: '' })
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
 
@@ -72,13 +71,12 @@ export default function IntegrationsPanel(): React.JSX.Element {
     setSaveState('saving')
     setSaveError(null)
     try {
-      const keys: { anthropic?: string; deepgram?: string; elevenlabs?: string; picovoice?: string } = {}
+      const keys: { anthropic?: string; deepgram?: string; elevenlabs?: string } = {}
       if (form.anthropic) keys.anthropic = form.anthropic
       if (form.deepgram) keys.deepgram = form.deepgram
       if (form.elevenlabs) keys.elevenlabs = form.elevenlabs
-      if (form.picovoice) keys.picovoice = form.picovoice
       await window.jarvis.saveApiKeys(keys)
-      setForm({ anthropic: '', deepgram: '', elevenlabs: '', picovoice: '' })
+      setForm({ anthropic: '', deepgram: '', elevenlabs: '' })
       setSaveState('saved')
       refresh()
       setTimeout(() => setSaveState('idle'), 3000)
@@ -93,7 +91,6 @@ export default function IntegrationsPanel(): React.JSX.Element {
       <Row label="Claude" value={services ? statusLabel(services.anthropic) : '…'} />
       <Row label="Deepgram (STT)" value={services ? statusLabel(services.deepgram) : '…'} />
       <Row label="ElevenLabs (TTS)" value={services ? statusLabel(services.elevenlabs) : '…'} />
-      <Row label="Picovoice (Wake Word)" value={diagnostics ? (diagnostics.picovoiceKeyLoaded ? 'CONNECTED' : 'NOT CONFIGURED (optional)') : '…'} />
 
       {diagnostics && (
         <>
@@ -157,16 +154,6 @@ export default function IntegrationsPanel(): React.JSX.Element {
               placeholder={diagnostics?.elevenLabsKeyLoaded ? 'Already set — leave blank to keep' : ''}
               value={form.elevenlabs}
               onChange={(e) => setForm((f) => ({ ...f, elevenlabs: e.target.value }))}
-              style={{ ...inputStyle, marginTop: 3 }}
-            />
-          </label>
-          <label style={{ fontSize: 10, opacity: 0.6 }}>
-            Picovoice AccessKey (optional — enables wake word)
-            <input
-              type="password"
-              placeholder={diagnostics?.picovoiceKeyLoaded ? 'Already set — leave blank to keep' : 'Free key from Picovoice Console'}
-              value={form.picovoice}
-              onChange={(e) => setForm((f) => ({ ...f, picovoice: e.target.value }))}
               style={{ ...inputStyle, marginTop: 3 }}
             />
           </label>

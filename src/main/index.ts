@@ -58,7 +58,7 @@ app.whenReady().then(() => {
   // Wired here (the composition root) rather than as a direct import in
   // either direction — see presence/index.ts's class comment for why.
   presence.registerSessionControls({ start: startSession, end: endSession })
-  presence.start()
+  void presence.start() // async (loads the ONNX wake-word engine) — fire-and-forget, nothing else at startup depends on Presence being ready immediately
 
   // Command Center is the default, primary surface — Ambient is opt-in
   // (see window.ts's showAmbient/showCommandCenter: the two are mutually

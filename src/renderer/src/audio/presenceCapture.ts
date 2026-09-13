@@ -1,13 +1,13 @@
 /**
  * Continuous, low-overhead mic capture used ONLY for local wake-word
  * detection while Presence is "sleeping" — see main/presence/. Forces the
- * AudioContext to 16kHz (Porcupine's required sample rate); Chromium
- * resamples the raw mic signal to the context's rate internally, so the
- * PCM16 frames sent here are already at the right rate with no resampling
- * code needed on this side. Deliberately much simpler than MicCapture
- * (audio/capture.ts): no VAD, no barge-in, no amplitude/HUD reactivity —
- * just raw PCM to main, which buffers it into Porcupine-sized frames
- * itself (see presence/frameBuffer.ts).
+ * AudioContext to 16kHz (the wake-word engine's required sample rate);
+ * Chromium resamples the raw mic signal to the context's rate internally,
+ * so the PCM16 frames sent here are already at the right rate with no
+ * resampling code needed on this side. Deliberately much simpler than
+ * MicCapture (audio/capture.ts): no VAD, no barge-in, no amplitude/HUD
+ * reactivity — just raw PCM to main, which buffers it into the engine's
+ * frame size itself (see presence/frameBuffer.ts).
  *
  * Ownership: this must never run at the same time as MicCapture's stream —
  * see App.tsx, which starts/stops this strictly based on Presence's

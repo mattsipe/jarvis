@@ -125,11 +125,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('config:diagnostics', () => getConfigDiagnostics())
   ipcMain.handle(
     'config:save-keys',
-    (_event, keys: { anthropic?: string; deepgram?: string; elevenlabs?: string; picovoice?: string }) => {
-      const result = saveApiKeys(keys)
-      if (keys.picovoice !== undefined) presence.refreshEngine() // pick up a newly-added key without an app restart
-      return result
-    }
+    (_event, keys: { anthropic?: string; deepgram?: string; elevenlabs?: string }) => saveApiKeys(keys)
   )
 
   // Presence / hands-free (see main/presence/) — status for the Command
@@ -153,6 +149,13 @@ export function registerIpcHandlers(): void {
   })
   ipcMain.handle('presence:toggle-muted', () => {
     presence.toggleMuted()
+    return presence.status()
+  })
+  // The wake-word engine needs no key/account, so this is only ever useful
+  // for the rare "engine failed to load" case (e.g. a corrupted install) —
+  // a manual retry from the Presence panel rather than requiring a restart.
+  ipcMain.handle('presence:retry-engine', async () => {
+    await presence.retryEngine()
     return presence.status()
   })
   ipcMain.on('presence:audio-chunk', (_event, chunk: ArrayBuffer) => {

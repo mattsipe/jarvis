@@ -4,8 +4,8 @@
  * this rather than the other way around). Muted always wins (mic fully
  * off beats everything else); an active session beats idle wake-word
  * listening; anything short of "enabled + engine ready" collapses to
- * disabled (hotkey-only fallback), which is also where a missing/invalid
- * Picovoice AccessKey lands.
+ * disabled (hotkey-only fallback), which is also where an engine that
+ * failed to load lands.
  */
 export type PresenceState = 'disabled' | 'sleeping' | 'muted' | 'active'
 

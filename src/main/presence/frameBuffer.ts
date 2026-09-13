@@ -1,7 +1,7 @@
 /**
  * Pure PCM16 frame slicer — no Electron/native-module imports, so it's
- * unit-testable directly. Porcupine's `process()` requires exactly
- * `frameLength` Int16 samples per call, but the renderer's mic capture
+ * unit-testable directly. The wake-word engine's `processFrame()` requires
+ * exactly `frameLength` Int16 samples per call, but the renderer's mic capture
  * sends whatever-sized chunks its own audio callback produces (see
  * audio/presenceCapture.ts) — this accumulates those chunks and hands back
  * complete frames plus whatever partial remainder to carry into the next
