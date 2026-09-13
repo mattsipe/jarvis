@@ -112,6 +112,11 @@ const jarvisAPI = {
   saveApiKeys: (keys: { anthropic?: string; deepgram?: string; elevenlabs?: string }): Promise<unknown> =>
     ipcRenderer.invoke('config:save-keys', keys),
 
+  // --- Memory (Command Center Memory panel) ---
+  getMemoryList: (): Promise<unknown[]> => ipcRenderer.invoke('memory:list'),
+  updateMemory: (id: string, content: string): Promise<unknown> => ipcRenderer.invoke('memory:update', id, content),
+  deleteMemory: (id: string): Promise<unknown> => ipcRenderer.invoke('memory:delete', id),
+
   /** Dev-only — see ipc.ts's 'dev:test-agent-turn'. Not registered in production; rejects there. */
   devTestAgentTurn: (text: string): Promise<unknown> => ipcRenderer.invoke('dev:test-agent-turn', text),
 

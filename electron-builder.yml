@@ -17,6 +17,13 @@ win:
     - target: nsis
       arch:
         - x64
+  # jarvis-helper.exe (native/jarvis-helper) — built by the CI workflow
+  # before this runs (see .github/workflows/release.yml). Windows-only:
+  # darwin builds never carry it, and platform/helper.ts never spawns it
+  # off win32 anyway.
+  extraResources:
+    - from: native/jarvis-helper/bin/Release/net8.0-windows/win-x64/publish/jarvis-helper.exe
+      to: jarvis-helper.exe
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}

@@ -6,3 +6,5 @@ out
 .DS_Store
 release
 *.local
+native/jarvis-helper/bin
+native/jarvis-helper/obj

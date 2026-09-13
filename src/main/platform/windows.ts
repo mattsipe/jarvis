@@ -5,6 +5,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import os from 'os'
 import { logError } from '../logger'
+import { jarvisHelper } from './helper'
 import type { PlatformControl, SystemStatusInfo, ToolResult } from './types'
 
 const execFileAsync = promisify(execFile)
@@ -133,24 +134,40 @@ export class WindowsPlatformControl implements PlatformControl {
     } catch (primaryErr) {
       const resolved = await this.resolveStartApp(nameOrPath)
       if (!resolved) return this.failure(`open "${nameOrPath}"`, primaryErr)
+      // Get-StartApps' AppID for a real UWP/packaged app is
+      // "PackageFamilyName!AppId" — only that form works with
+      // shell:AppsFolder. For an ordinary desktop app (Chrome, Steam,
+      // etc.) the AppID is a filesystem path to its shortcut/exe, and
+      // shell:AppsFolder silently does nothing with a raw path — that
+      // was the second real bug here. Launch it directly instead.
+      const isPackagedAppId = /![^!]+$/.test(resolved.appId)
       try {
-        // Get-StartApps' AppID for a real UWP/packaged app is
-        // "PackageFamilyName!AppId" — only that form works with
-        // shell:AppsFolder. For an ordinary desktop app (Chrome, Steam,
-        // etc.) the AppID is a filesystem path to its shortcut/exe, and
-        // shell:AppsFolder silently does nothing with a raw path — that
-        // was the second real bug here. Launch it directly instead.
-        const isPackagedAppId = /![^!]+$/.test(resolved.appId)
-        if (isPackagedAppId) {
-          await this.runPowerShell(`explorer.exe shell:AppsFolder\\${resolved.appId}`)
-        } else {
-          await this.runPowerShell(`Start-Process ${this.psQuote(resolved.appId)}`)
-        }
+        if (isPackagedAppId) await this.runPowerShell(`explorer.exe shell:AppsFolder\\${resolved.appId}`)
+        else await this.runPowerShell(`Start-Process ${this.psQuote(resolved.appId)}`)
         return { ok: true, message: `Opened ${resolved.name}.` }
       } catch (fallbackErr) {
         return this.failure(`launch ${resolved.name}`, fallbackErr)
       }
     }
+  }
+
+  /** Launches a packaged/UWP app directly by its already-known AppUserModelID — used by apps/resolver.ts once an app has been catalogued, skipping the name-guessing openApp() above entirely. */
+  async launchByAppId(appId: string): Promise<ToolResult> {
+    try {
+      await this.runPowerShell(`explorer.exe shell:AppsFolder\\${appId}`)
+      return { ok: true, message: 'Opened.' }
+    } catch (err) {
+      return this.failure('open that app', err)
+    }
+  }
+
+  /** Full Start Menu catalog (name + raw AppID for every entry) — see apps/catalog.ts. Distinct from resolveStartApp(), which only needs the first match for the openApp() fallback above. */
+  async listInstalledApps(): Promise<{ name: string; appId: string }[]> {
+    const out = await this.runPowerShell('Get-StartApps | Select-Object Name,AppID | ConvertTo-Json -Compress')
+    if (!out) return []
+    const parsed = JSON.parse(out) as { Name: string; AppID: string } | { Name: string; AppID: string }[]
+    const list = Array.isArray(parsed) ? parsed : [parsed]
+    return list.map((e) => ({ name: e.Name, appId: e.AppID }))
   }
 
   async closeApp(name: string): Promise<ToolResult> {
@@ -175,18 +192,35 @@ export class WindowsPlatformControl implements PlatformControl {
   /**
    * Core Audio (IAudioEndpointVolume) via inline C#, per the plan's risk
    * mitigation — no nircmd or other external binary. Contains no single
-   * quotes, which matters: see runAudioHelper() for why.
+   * quotes, which matters: see runAudioHelper() for why. This is now only
+   * the fallback path if jarvis-helper.exe (see platform/helper.ts) isn't
+   * running — the helper's Audio.cs is the primary implementation.
+   *
+   * The vtable below previously had an off-by-one: it was missing the
+   * placeholder for GetChannelVolumeLevelScalar (real vtable slot 13,
+   * counting from 3 since the 3 IUnknown slots are implicit under
+   * InterfaceIsIUnknown). That made the declared "SetMute" actually land
+   * on slot 13 (the real GetChannelVolumeLevelScalar) and "GetMute" land
+   * on slot 14 (the real SetMute) — calling the wrong native methods
+   * entirely with mismatched argument types. Every slot is listed
+   * explicitly now so the count can't drift silently again.
    */
   private static readonly AUDIO_HELPER_CSHARP = `
 using System;
 using System.Runtime.InteropServices;
 [Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 interface IAudioEndpointVolume {
-  int f1(); int f2(); int f3(); int f4();
+  int RegisterControlChangeNotify_NotUsed();
+  int UnregisterControlChangeNotify_NotUsed();
+  int GetChannelCount_NotUsed();
+  int SetMasterVolumeLevel_NotUsed();
   int SetMasterVolumeLevelScalar(float fLevel, Guid pguidEventContext);
-  int f6();
+  int GetMasterVolumeLevel_NotUsed();
   int GetMasterVolumeLevelScalar(out float pfLevel);
-  int f8(); int f9(); int f10();
+  int SetChannelVolumeLevel_NotUsed();
+  int SetChannelVolumeLevelScalar_NotUsed();
+  int GetChannelVolumeLevel_NotUsed();
+  int GetChannelVolumeLevelScalar_NotUsed();
   int SetMute(bool bMute, Guid pguidEventContext);
   int GetMute(out bool pbMute);
 }
@@ -215,37 +249,53 @@ public class AudioHelper {
   }
 
   async setVolume(percent: number): Promise<ToolResult> {
-    const clamped = Math.max(0, Math.min(100, Math.round(percent))) / 100
+    const clamped = Math.max(0, Math.min(100, Math.round(percent)))
     try {
-      await this.runAudioHelper(
-        `$v = [AudioHelper]::GetVolumeObject(); $v.SetMasterVolumeLevelScalar(${clamped}, [Guid]::Empty)`
-      )
-      return { ok: true, message: `Volume set to ${Math.round(clamped * 100)} percent.` }
-    } catch (err) {
-      return this.failure('set volume', err)
+      // jarvis-helper.exe is the primary path — no per-call PowerShell
+      // startup or Add-Type compile. It lazily starts itself on first
+      // call; if it can't start or the call fails, fall back to the
+      // inline-C# PowerShell path (also vtable-fixed, see
+      // AUDIO_HELPER_CSHARP) so volume control never hard-depends on it.
+      const result = await jarvisHelper.audioSetVolume(clamped)
+      return { ok: true, message: `Volume set to ${result.volumePercent} percent.` }
+    } catch {
+      try {
+        await this.runAudioHelper(`$v = [AudioHelper]::GetVolumeObject(); $v.SetMasterVolumeLevelScalar(${clamped / 100}, [Guid]::Empty)`)
+        return { ok: true, message: `Volume set to ${clamped} percent.` }
+      } catch (err) {
+        return this.failure('set volume', err)
+      }
     }
   }
 
   async adjustVolume(deltaPercent: number): Promise<ToolResult> {
     try {
-      const out = await this.runAudioHelper(
-        `$v = [AudioHelper]::GetVolumeObject(); $cur = 0; $v.GetMasterVolumeLevelScalar([ref]$cur); Write-Output ([Math]::Round($cur * 100))`
-      )
-      const current = parseInt(out, 10)
-      return this.setVolume((Number.isFinite(current) ? current : 50) + deltaPercent)
-    } catch (err) {
-      return this.failure('adjust volume', err)
+      const current = (await jarvisHelper.audioGet()).volumePercent
+      return this.setVolume(current + deltaPercent)
+    } catch {
+      try {
+        const out = await this.runAudioHelper(
+          `$v = [AudioHelper]::GetVolumeObject(); $cur = 0; $v.GetMasterVolumeLevelScalar([ref]$cur); Write-Output ([Math]::Round($cur * 100))`
+        )
+        const current = parseInt(out, 10)
+        return this.setVolume((Number.isFinite(current) ? current : 50) + deltaPercent)
+      } catch (err) {
+        return this.failure('adjust volume', err)
+      }
     }
   }
 
   async setMute(muted: boolean): Promise<ToolResult> {
     try {
-      await this.runAudioHelper(
-        `$v = [AudioHelper]::GetVolumeObject(); $v.SetMute($${muted ? 'true' : 'false'}, [Guid]::Empty)`
-      )
+      await jarvisHelper.audioSetMute(muted)
       return { ok: true, message: muted ? 'Muted.' : 'Unmuted.' }
-    } catch (err) {
-      return this.failure('change mute state', err)
+    } catch {
+      try {
+        await this.runAudioHelper(`$v = [AudioHelper]::GetVolumeObject(); $v.SetMute($${muted ? 'true' : 'false'}, [Guid]::Empty)`)
+        return { ok: true, message: muted ? 'Muted.' : 'Unmuted.' }
+      } catch (err) {
+        return this.failure('change mute state', err)
+      }
     }
   }
 
@@ -325,24 +375,41 @@ $bmp.Save(${this.psQuote(filePath)}, [System.Drawing.Imaging.ImageFormat]::Png);
   }
 
   async focusWindow(appName: string): Promise<ToolResult> {
+    // Primary path: the helper's own window list, matched by title OR
+    // process name (substring, case-insensitive) — this is what fixes
+    // "focus Chrome" actually finding a window titled "Some Page - Google
+    // Chrome" (process name "chrome"), which AppActivate's title-only,
+    // options-free matching couldn't reliably do.
     try {
-      // AppActivate returns a boolean rather than throwing when it can't
-      // find a matching window — the previous version piped it to Out-Null
-      // and unconditionally reported success, so a real "no such window"
-      // case looked like it worked. Also: AppActivate matches on window
-      // *title*, not process/app name, so "Chrome" won't match a window
-      // titled "Some Page - Google Chrome" — surfaced explicitly below
-      // rather than silently.
-      const out = await this.runPowerShell(
-        `if ((New-Object -ComObject WScript.Shell).AppActivate(${this.psQuote(appName)})) { Write-Output 'ACTIVATED' } else { Write-Output 'NOT_FOUND' }`
-      )
-      if (out.trim() === 'ACTIVATED') return { ok: true, message: `Switched to ${appName}.` }
-      return {
-        ok: false,
-        message: `No open window matches "${appName}" — try the exact window title text, since this matches titles, not app names.`
+      const { windows } = await jarvisHelper.listWindows()
+      const q = appName.toLowerCase()
+      const match =
+        windows.find((w) => w.processName.toLowerCase() === q) ??
+        windows.find((w) => w.title.toLowerCase().includes(q) || w.processName.toLowerCase().includes(q))
+      if (!match) return { ok: false, message: `No open window matches "${appName}".` }
+      const { focused } = await jarvisHelper.focusWindow(match.hwnd)
+      if (focused) return { ok: true, message: `Switched to ${match.title || match.processName}.` }
+      return { ok: false, message: `Found "${match.title || match.processName}" but couldn't bring it to the front.` }
+    } catch {
+      // Fallback: AppActivate returns a boolean rather than throwing when
+      // it can't find a matching window — a previous version piped it to
+      // Out-Null and unconditionally reported success, so a real "no such
+      // window" case looked like it worked. Also: AppActivate matches on
+      // window *title*, not process/app name, so "Chrome" won't match a
+      // window titled "Some Page - Google Chrome" (the helper path above
+      // fixes that; this is only reached if the helper itself is down).
+      try {
+        const out = await this.runPowerShell(
+          `if ((New-Object -ComObject WScript.Shell).AppActivate(${this.psQuote(appName)})) { Write-Output 'ACTIVATED' } else { Write-Output 'NOT_FOUND' }`
+        )
+        if (out.trim() === 'ACTIVATED') return { ok: true, message: `Switched to ${appName}.` }
+        return {
+          ok: false,
+          message: `No open window matches "${appName}" — try the exact window title text, since this matches titles, not app names.`
+        }
+      } catch (err) {
+        return this.failure(`switch to ${appName}`, err)
       }
-    } catch (err) {
-      return this.failure(`switch to ${appName}`, err)
     }
   }
 
@@ -369,6 +436,18 @@ $bmp.Save(${this.psQuote(filePath)}, [System.Drawing.Imaging.ImageFormat]::Png);
 
     await run('powershell-invocation', () => this.runPowerShell('Write-Output OK'))
     await run('start-apps-enumeration', async () => `${await this.runPowerShell('(Get-StartApps | Measure-Object).Count')} apps discoverable`)
+    await run('helper-process', async () => {
+      await jarvisHelper.ping()
+      return 'jarvis-helper.exe responding'
+    })
+    await run('helper-foreground-window', async () => {
+      const fg = await jarvisHelper.foregroundWindow()
+      return `active window: ${fg.title || fg.processName || '(none)'}`
+    })
+    await run('helper-audio', async () => {
+      const { volumePercent, muted } = await jarvisHelper.audioGet()
+      return `current volume ${volumePercent}%${muted ? ' (muted)' : ''}`
+    })
     await run('wscript-shell-com', async () => {
       await this.runPowerShell('(New-Object -ComObject WScript.Shell) | Out-Null')
       return 'created'

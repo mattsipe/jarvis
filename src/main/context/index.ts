@@ -1,10 +1,24 @@
 import os from 'os'
+import { screen } from 'electron'
 import { getPlatformControl } from '../platform'
+import { jarvisHelper } from '../platform/helper'
 import { loadPersistentContext, savePersistentContext } from './store'
 import { readLocalHomeLocation, writeLocalHomeLocation } from './local'
+import { memoryStore } from './memory'
 import type { LiveContext, LocalHomeLocation, LocationResolution, PersistentContext } from './types'
 
 export type { PersistentContext, LiveContext, LocationResolution } from './types'
+export { memoryStore } from './memory'
+export type { MemoryRecord, MemoryKind, MemorySource } from './memory'
+
+/** Cheap live "what's on screen" fact injected into every turn — see buildSystemPromptContext(). Never a screenshot; see tools/perception.ts's look_at_screen for that. */
+export interface ActiveWindowContext {
+  title: string
+  processName: string
+  cursor: { x: number; y: number }
+  /** Windows only (from the helper) — used by perception/capture.ts to crop an "active_window" screenshot. Unverified against non-100% display scaling; see capture.ts's comment. */
+  bounds?: { x: number; y: number; width: number; height: number }
+}
 
 const SAVE_DEBOUNCE_MS = 1000
 
@@ -21,6 +35,7 @@ const SAVE_DEBOUNCE_MS = 1000
 export class ContextManager {
   private persistent: PersistentContext
   private saveTimer: ReturnType<typeof setTimeout> | null = null
+  readonly memory = memoryStore
 
   private sessionState = {
     commandCenterOpen: false,
@@ -29,6 +44,24 @@ export class ContextManager {
 
   constructor() {
     this.persistent = loadPersistentContext()
+    if (!this.persistent.migratedToMemory) {
+      this.memory.migrateFromPersistentContext(this.persistent)
+      this.updatePersistent({ migratedToMemory: true })
+    }
+  }
+
+  /** Active window + cursor, cheap enough to call every turn. Windows only for now — the helper has no macOS/dev equivalent yet (Phase 1 scope). */
+  async getActiveWindow(): Promise<ActiveWindowContext | null> {
+    if (process.platform !== 'win32') {
+      const cursor = screen.getCursorScreenPoint()
+      return { title: '', processName: '', cursor }
+    }
+    try {
+      const fg = await jarvisHelper.foregroundWindow()
+      return { title: fg.title, processName: fg.processName, cursor: fg.cursor, bounds: fg.bounds }
+    } catch {
+      return null
+    }
   }
 
   getPersistent(): PersistentContext {
@@ -84,14 +117,23 @@ export class ContextManager {
   async buildSystemPromptContext(): Promise<string> {
     const live = await this.getLiveContext(false)
     const general = await this.resolveLocation('general')
+    const activeWindow = await this.getActiveWindow()
     return [
       `Current time: ${live.nowIso} (${live.timeZone}).`,
       `Platform: ${live.platform}.`,
       `Weston's general location: ${general.label}.`,
-      live.session.voiceSessionActive ? 'Talking with Weston now via voice.' : ''
+      live.session.voiceSessionActive ? 'Talking with Weston now via voice.' : '',
+      activeWindow?.title ? `Active window: "${activeWindow.title}" (${activeWindow.processName}).` : '',
+      activeWindow ? `Cursor at (${activeWindow.cursor.x}, ${activeWindow.cursor.y}).` : ''
     ]
       .filter(Boolean)
       .join(' ')
+  }
+
+  /** Separate cache breakpoint from the persona and the per-turn context above — see agent/loop.ts and memory.ts's alwaysOnBlock(). */
+  buildMemoryContext(): string {
+    const block = this.memory.alwaysOnBlock()
+    return block ? `What I remember about Weston: ${block}` : ''
   }
 
   private scheduleSave(): void {

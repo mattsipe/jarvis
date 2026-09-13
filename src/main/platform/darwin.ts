@@ -143,6 +143,17 @@ export class DarwinPlatformControl implements PlatformControl {
     }
   }
 
+  /** Dev-parity: AppID === display name here since macOS launches by name via `open -a`, unlike Windows' AppUserModelID. */
+  async listInstalledApps(): Promise<{ name: string; appId: string }[]> {
+    const apps = await listInstalledApps()
+    return apps.map((name) => ({ name, appId: name }))
+  }
+
+  /** Not meaningful on macOS — there's no packaged-app launch distinct from openApp(). */
+  async launchByAppId(): Promise<ToolResult> {
+    return { ok: false, message: "launchByAppId isn't supported on macOS — use openApp instead." }
+  }
+
   async launchSteamGame(nameOrAppId: string): Promise<ToolResult> {
     const isNumeric = /^\d+$/.test(nameOrAppId.trim())
     try {

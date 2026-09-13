@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Long-lived Windows-only companion process for JARVIS's main Electron
+    process — see src/main/platform/helper.ts for the client and
+    src/main/platform/windows.ts for why it exists (PowerShell's ~0.3-2s
+    per-call startup/compile cost is fine for rare calls, not for per-turn
+    live context or interactive control). Published self-contained so the
+    target PC never needs a .NET runtime installed, matching the same
+    "nothing extra to install" bar as the rest of JARVIS.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>JarvisHelper</RootNamespace>
+    <AssemblyName>jarvis-helper</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+</Project>

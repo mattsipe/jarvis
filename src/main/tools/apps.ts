@@ -1,12 +1,36 @@
 import { z } from 'zod'
-import type { JarvisTool } from './registry'
+import type { JarvisTool, ToolContext, ToolResult } from './registry'
+import { resolveApp } from '../apps/resolver'
+import { getCatalog } from '../apps/catalog'
+
+/** Launches an already-resolved catalog entry via the right platform primitive for its kind. */
+async function launchResolved(entry: { kind: string; launchTarget: string; appId?: string }, ctx: ToolContext): Promise<ToolResult> {
+  if (entry.kind === 'packaged') return ctx.platform.launchByAppId(entry.appId ?? entry.launchTarget)
+  if (entry.kind === 'steam-game') return ctx.platform.launchSteamGame(entry.appId ?? entry.launchTarget)
+  return ctx.platform.openApp(entry.launchTarget)
+}
 
 export const openAppTool: JarvisTool = {
   name: 'open_app',
-  description: 'Open/launch a desktop application by name.',
+  description:
+    'Open/launch a desktop application by name. Resolves aliases and installed apps (including packaged apps like new Outlook, and Steam games) automatically — if more than one installed app could match equally well, this returns candidates instead of guessing; ask Weston which one, then call remember (kind "alias") with his answer so it resolves cleanly next time.',
   risk: 'moderate',
-  input: z.object({ name: z.string().describe('The application name, e.g. "Safari" or "Steam".') }),
-  run: (input, ctx) => ctx.platform.openApp(input.name)
+  input: z.object({ name: z.string().describe('The application name, e.g. "Safari", "Steam", or "Outlook".') }),
+  run: async (input, ctx) => {
+    const resolution = resolveApp(input.name)
+    // No catalog match at all (catalog empty/stale, or a name the catalog
+    // genuinely doesn't have) — fall back to the adapter's own
+    // best-effort direct launch rather than failing outright.
+    if (!resolution) return ctx.platform.openApp(input.name)
+    if ('ambiguous' in resolution) {
+      return {
+        ok: false,
+        message: `More than one app matches "${input.name}": ${resolution.candidates.map((c) => c.displayName).join(', ')}. Ask which one, then remember the answer.`,
+        data: { ambiguous: true, candidates: resolution.candidates }
+      }
+    }
+    return launchResolved(resolution.entry, ctx)
+  }
 }
 
 export const closeAppTool: JarvisTool = {
@@ -19,10 +43,24 @@ export const closeAppTool: JarvisTool = {
 
 export const findAppTool: JarvisTool = {
   name: 'find_app',
-  description: 'Search installed applications by a partial name, to discover the exact name before opening/closing it.',
+  description: 'Search installed applications (and Steam games) by a partial name, to discover the exact name before opening/closing it.',
   risk: 'safe',
   input: z.object({ query: z.string().describe('Partial application name to search for.') }),
-  run: (input, ctx) => ctx.platform.findApp(input.query)
+  run: async (input, ctx) => {
+    const q = input.query.toLowerCase()
+    const catalogMatches = getCatalog()
+      .filter((e) => e.displayName.toLowerCase().includes(q))
+      .map((e) => e.displayName)
+    if (catalogMatches.length > 0) {
+      return {
+        ok: true,
+        message: catalogMatches.length === 1 ? catalogMatches[0] : `Found: ${catalogMatches.slice(0, 8).join(', ')}.`,
+        data: { matches: catalogMatches }
+      }
+    }
+    // Catalog empty/stale — fall back to the adapter's own live search.
+    return ctx.platform.findApp(input.query)
+  }
 }
 
 export const focusWindowTool: JarvisTool = {
@@ -35,8 +73,21 @@ export const focusWindowTool: JarvisTool = {
 
 export const launchSteamGameTool: JarvisTool = {
   name: 'launch_steam_game',
-  description: 'Launch a game through Steam, by Steam app ID if known or by name otherwise.',
+  description: 'Launch a game through Steam, by name (resolved against the Steam library automatically) or app ID if known.',
   risk: 'moderate',
-  input: z.object({ nameOrAppId: z.string().describe('The Steam app ID (preferred) or the game name.') }),
-  run: (input, ctx) => ctx.platform.launchSteamGame(input.nameOrAppId)
+  input: z.object({ nameOrAppId: z.string().describe('The game name (preferred) or its Steam app ID.') }),
+  run: async (input, ctx) => {
+    const resolution = resolveApp(input.nameOrAppId)
+    if (resolution && !('ambiguous' in resolution) && resolution.entry.kind === 'steam-game') {
+      return ctx.platform.launchSteamGame(resolution.entry.appId ?? input.nameOrAppId)
+    }
+    if (resolution && 'ambiguous' in resolution) {
+      return {
+        ok: false,
+        message: `More than one match for "${input.nameOrAppId}": ${resolution.candidates.map((c) => c.displayName).join(', ')}.`,
+        data: { ambiguous: true, candidates: resolution.candidates }
+      }
+    }
+    return ctx.platform.launchSteamGame(input.nameOrAppId)
+  }
 }

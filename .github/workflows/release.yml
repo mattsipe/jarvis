@@ -31,6 +31,18 @@ jobs:
         with:
           node-version: 20
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # jarvis-helper.exe — the native companion process (see
+      # native/jarvis-helper and src/main/platform/helper.ts). Published
+      # self-contained so the target PC never needs a .NET runtime
+      # installed. electron-builder.yml's win.extraResources picks up the
+      # exact output path below.
+      - name: Publish jarvis-helper.exe
+        run: dotnet publish native/jarvis-helper/jarvis-helper.csproj -r win-x64 --self-contained true -c Release
+
       # electron-builder's GitHub publisher has a real race condition: when
       # a release doesn't exist yet, its parallel per-file upload tasks each
       # try to create it at once, and only one file reliably lands on the

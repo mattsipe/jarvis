@@ -16,6 +16,7 @@ import ActiveTaskPanel from './commandcenter/ActiveTaskPanel'
 import RecentActionsPanel from './commandcenter/RecentActionsPanel'
 import RoutinesPanel from './commandcenter/RoutinesPanel'
 import DiagnosticsPanel from './commandcenter/DiagnosticsPanel'
+import MemoryPanel from './commandcenter/MemoryPanel'
 
 const HUD_STATES: readonly HudState[] = ['ambient', 'listening', 'thinking', 'acting', 'speaking', 'success', 'error']
 function isHudState(v: string): v is HudState {
@@ -127,6 +128,7 @@ export default function CommandCenterApp(): React.JSX.Element {
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14, minHeight: 0 }}>
           <DiagnosticsPanel />
+          <MemoryPanel />
           <RecentActionsPanel />
         </div>
       </div>

@@ -8,6 +8,7 @@ import { config } from '../config'
 import { requestConfirmation, tryResolveConfirmationFromSpeech } from '../tools/confirmation'
 import { recordToolActivity } from '../tools/activity'
 import { contextManager } from '../context'
+import { learnFromSession, type SessionTurn } from '../context/autolearn'
 
 const INACTIVITY_TIMEOUT_MS = 8000
 // Hard cap on one continuous session, regardless of activity — bounds
@@ -54,6 +55,8 @@ export class VoiceSession {
   private turnId = 0
   private activeAbortController: AbortController | null = null
   private activeTts: ElevenLabsTts | null = null
+  /** This session's own turns only — feeds learnFromSession() on terminate(), never anything from a different session. */
+  private turns: SessionTurn[] = []
 
   constructor(private onEnded: () => void) {
     usage.recordSessionStart()
@@ -144,6 +147,9 @@ export class VoiceSession {
     this.activeTts = null
     contextManager.setVoiceSessionActive(false)
     this.send('voice:session-ended', null)
+    // Fire-and-forget, once per session, never blocking the actual
+    // teardown above — see context/autolearn.ts for the guardrails.
+    void learnFromSession(this.turns)
     this.onEnded()
   }
 
@@ -330,6 +336,7 @@ export class VoiceSession {
     tts.end()
     if (this.activeTts === tts) this.activeTts = null
     if (this.activeAbortController === controller) this.activeAbortController = null
+    this.turns.push({ userText: text, assistantText: result.fullText })
     this.send('voice:agent-done', { tier: result.tier })
   }
 

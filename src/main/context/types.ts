@@ -20,11 +20,14 @@ export interface PersistentContext {
     lon?: number
   }
   devices: string[]
-  /** Spoken alias -> canonical app name/path, e.g. "steam" -> "Steam". */
+  /** @deprecated Superseded by MemoryStore's 'alias' records (context/memory.ts) — kept only so migrateFromPersistentContext() has a one-time source to read from. */
   appAliases: Record<string, string>
+  /** @deprecated Superseded by MemoryStore's 'routine' records. */
   routines: Array<{ name: string; description: string }>
-  /** Freeform bucket for anything JARVIS picks up during use that doesn't have a typed home yet. */
+  /** @deprecated Superseded by MemoryStore's 'learned' records. */
   learnedContext: Record<string, unknown>
+  /** Set once memory.json has absorbed the fields above — see MemoryStore.migrateFromPersistentContext(). */
+  migratedToMemory?: boolean
 }
 
 export const DEFAULT_GENERAL_LOCATION = { label: 'Madison, Alabama 35756' }

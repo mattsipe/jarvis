@@ -17,6 +17,8 @@ export interface ToolResult {
   data?: Record<string, unknown>
   /** Never secret — see ToolDiagnostics. Powers Command Center's Recent Actions detail and the jarvis.log entry. */
   diagnostics?: ToolDiagnostics
+  /** Set only by look_at_screen — turns this tool_result into an image block Claude can actually see. See agent/loop.ts's pruning of older screenshots. */
+  images?: Array<{ mediaType: 'image/png' | 'image/jpeg'; base64: string }>
 }
 
 export interface SystemStatusInfo {
@@ -52,6 +54,10 @@ export interface PlatformControl {
   focusWindow(appName: string): Promise<ToolResult>
   /** Runs a battery of adapter-specific capability checks with no user-visible side effect — see the Command Center's "Run Self-Test". */
   selfTest(): Promise<ToolResult>
+  /** All installed/launchable apps this adapter can enumerate — feeds apps/catalog.ts. Windows: Get-StartApps' {Name, AppID}. macOS: /Applications + ~/Applications, AppID === display name (launched via `open -a`). */
+  listInstalledApps(): Promise<{ name: string; appId: string }[]>
+  /** Launches a packaged/UWP app by its AppUserModelID (Windows: `PackageFamilyName!AppId`, e.g. new Outlook). Not meaningful on macOS. */
+  launchByAppId(appId: string): Promise<ToolResult>
 }
 
 export class UnsupportedFeatureError extends Error {}

@@ -71,6 +71,11 @@ function ensureOverlayWindow(): BrowserWindow {
   overlayWindow.setAlwaysOnTop(true, 'screen-saver')
   overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   overlayWindow.setIgnoreMouseEvents(true, { forward: true })
+  // look_at_screen (tools/perception.ts) must never see JARVIS's own core/rings —
+  // excludes this window from any screen capture, including its own. Windows
+  // 10 2004+ and modern macOS; on an older OS this is a no-op (window still
+  // renders normally on the real display either way).
+  overlayWindow.setContentProtection(true)
 
   overlayWindow.on('closed', () => {
     overlayWindow = null

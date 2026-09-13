@@ -5,6 +5,8 @@ import { showCommandCenter, toggleCommandCenter, ensureVoiceSurfaceExists, creat
 import { registerIpcHandlers, toggleSession } from './ipc'
 import { registerBuiltInTools } from './tools'
 import { initUpdater, checkForUpdates } from './update/updater'
+import { scheduleCatalogRefresh } from './apps/catalog'
+import { jarvisHelper } from './platform/helper'
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.weston.jarvis')
@@ -36,6 +38,9 @@ app.whenReady().then(() => {
   registerBuiltInTools()
   registerIpcHandlers()
   createTray()
+  // Loads the cached catalog immediately, then refreshes in the background
+  // (and daily thereafter) — see apps/catalog.ts. Never blocks startup.
+  scheduleCatalogRefresh()
 
   // Ambient's renderer owns the real audio graph regardless of which
   // surface is visually active — create it (hidden) up front so voice
@@ -76,6 +81,7 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   globalShortcut.unregisterAll()
+  jarvisHelper.stop()
 })
 
 // Both windows now hide rather than close on their own 'close' handler, so

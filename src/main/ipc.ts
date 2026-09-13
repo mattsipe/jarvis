@@ -152,6 +152,14 @@ export function registerIpcHandlers(): void {
     (_event, keys: { anthropic?: string; deepgram?: string; elevenlabs?: string }) => saveApiKeys(keys)
   )
 
+  // Command Center's Memory panel — lists/edits/deletes what JARVIS
+  // remembers (see context/memory.ts). Same records the remember/
+  // recall_memory/update_memory/forget_memory tools use, so an edit made
+  // here is visible to JARVIS on the very next turn.
+  ipcMain.handle('memory:list', () => contextManager.memory.list())
+  ipcMain.handle('memory:update', (_event, id: string, content: string) => contextManager.memory.update(id, { content }))
+  ipcMain.handle('memory:delete', (_event, id: string) => contextManager.memory.remove(id))
+
   // Dev-only: lets automated/manual testing trigger the exact same code path
   // as the real hotkey, without needing OS Accessibility permission to
   // simulate a real keystroke. Never registered in a packaged build — the

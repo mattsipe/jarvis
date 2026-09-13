@@ -57,6 +57,17 @@ export interface AgentTurnHooks {
   requestConfirmation?: (call: ToolCallInfo) => Promise<boolean>
 }
 
+/** Replaces image blocks in every message before `keepIndex` with a text placeholder — see the call site in the tool loop below. */
+function pruneOlderScreenshots(messages: Anthropic.MessageParam[], keepIndex: number): void {
+  for (let i = 0; i < keepIndex; i++) {
+    const msg = messages[i]
+    if (msg.role !== 'user' || !Array.isArray(msg.content)) continue
+    msg.content = msg.content.map((block) =>
+      block.type === 'image' ? ({ type: 'text', text: '[earlier screenshot omitted]' } as const) : block
+    )
+  }
+}
+
 /**
  * Runs one conversational turn, including any tool calls Claude makes as
  * part of answering it (the plan's "manual streaming loop", not the SDK's
@@ -82,8 +93,13 @@ export async function runAgentTurn(
   ]
 
   const dynamicContext = await contextManager.buildSystemPromptContext()
+  const memoryContext = contextManager.buildMemoryContext()
   const system: Anthropic.TextBlockParam[] = [
     { type: 'text', text: PERSONA_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
+    // Its own breakpoint: changes far less often than per-turn context
+    // (window/cursor/time) but far more often than the persona, so it
+    // shouldn't share a cache entry with either.
+    ...(memoryContext ? [{ type: 'text' as const, text: memoryContext, cache_control: { type: 'ephemeral' as const } }] : []),
     { type: 'text', text: `Context: ${dynamicContext}` }
   ]
   const tools = toolRegistry.toAnthropicTools()
@@ -149,12 +165,30 @@ export async function runAgentTurn(
       resultBlocks.push({
         type: 'tool_result',
         tool_use_id: call.id,
-        content: result.message,
+        // look_at_screen is the only tool that ever sets `images` — every
+        // other tool_result stays a plain string exactly as before.
+        content:
+          result.images && result.images.length > 0
+            ? [
+                { type: 'text' as const, text: result.message },
+                ...result.images.map((img) => ({
+                  type: 'image' as const,
+                  source: { type: 'base64' as const, media_type: img.mediaType, data: img.base64 }
+                }))
+              ]
+            : result.message,
         is_error: !result.ok
       })
     }
 
     messages = [...messages, { role: 'user', content: resultBlocks }]
+    // Only the screenshot from the tool call that just ran stays as an
+    // actual image — every earlier one (from a previous iteration of
+    // *this* turn) is replaced with a text placeholder so a multi-step
+    // turn with several look_at_screen calls doesn't compound image
+    // tokens across iterations. Never touches `history` below, which only
+    // ever stores final text, not these message objects.
+    pruneOlderScreenshots(messages, messages.length - 1)
   }
 
   const last = chunker.flush()

@@ -11,6 +11,8 @@ import {
   screenshotTool,
   selfTestTool
 } from './system'
+import { rememberTool, recallMemoryTool, updateMemoryTool, forgetMemoryTool } from './memory'
+import { lookAtScreenTool } from './perception'
 import { recordToolActivity } from './activity'
 import { getPlatformControl } from '../platform'
 import { contextManager } from '../context'
@@ -35,7 +37,12 @@ export function registerBuiltInTools(): void {
     unmuteTool,
     systemStatusTool,
     screenshotTool,
-    selfTestTool
+    selfTestTool,
+    rememberTool,
+    recallMemoryTool,
+    updateMemoryTool,
+    forgetMemoryTool,
+    lookAtScreenTool
   ]) {
     toolRegistry.register(tool)
   }
