@@ -6,9 +6,11 @@ import { registerIpcHandlers } from './ipc'
 import { toggleSession, startSession, endSession } from './voice/sessionManager'
 import { registerBuiltInTools } from './tools'
 import { initUpdater, checkForUpdates } from './update/updater'
-import { scheduleCatalogRefresh } from './apps/catalog'
+import { scheduleCatalogRefresh, getCatalog } from './apps/catalog'
+import { appPreferences } from './apps/preferencesStore'
 import { jarvisHelper } from './platform/helper'
 import { presence } from './presence'
+import { contextManager } from './context'
 
 // Set by electron-builder's login-item args (see presence/index.ts's
 // applyLoginItemSettings) — a launch-at-login start should stay in the
@@ -49,6 +51,12 @@ app.whenReady().then(() => {
   // Loads the cached catalog immediately, then refreshes in the background
   // (and daily thereafter) — see apps/catalog.ts. Never blocks startup.
   scheduleCatalogRefresh()
+  // One-time move off the retired 'alias' memory kind (see memory.ts's
+  // migrateLegacyAppAliases doc comment) — run once, right after the
+  // catalog cache has loaded, so a legacy alias whose content matches a
+  // real installed app becomes a real, catalog-checked preference instead
+  // of just inert text.
+  contextManager.memory.migrateLegacyAppAliases(getCatalog(), (query, canonicalId) => appPreferences.set(query, canonicalId))
 
   // Ambient's renderer owns the real audio graph regardless of which
   // surface is visually active — create it (hidden) up front so voice

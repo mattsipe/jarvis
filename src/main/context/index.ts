@@ -27,7 +27,7 @@ const SAVE_DEBOUNCE_MS = 1000
  * separate from the Agent (reasoning) and ToolRegistry (actions) — tools
  * read from it, the agent loop's system prompt is seeded from it, but
  * neither owns it. See the plan's Context Manager priority: persistent
- * facts (profile/preferences/location/devices/aliases/routines) vs live
+ * facts (profile/preferences/location/devices/routines) vs live
  * facts (time/platform/active session/system telemetry), with location
  * resolved at general vs precise granularity depending on what a caller
  * actually needs (weather vs routing).

@@ -1,5 +1,6 @@
 import { toolRegistry } from './registry'
 import { openAppTool, closeAppTool, findAppTool, focusWindowTool, launchSteamGameTool } from './apps'
+import { setAppPreferenceTool } from './appPreference'
 import { openUrlTool } from './web'
 import {
   setVolumeTool,
@@ -29,6 +30,7 @@ export function registerBuiltInTools(): void {
     findAppTool,
     focusWindowTool,
     launchSteamGameTool,
+    setAppPreferenceTool,
     openUrlTool,
     setVolumeTool,
     volumeUpTool,

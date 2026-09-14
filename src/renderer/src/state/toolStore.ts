@@ -8,11 +8,28 @@ export interface PendingConfirmation {
   description: string
 }
 
+export interface LaunchTrace {
+  request: string
+  normalizedQuery: string
+  preference: { query: string; canonicalId: string | null; status: 'applied' | 'none' | 'ignored-not-installed' }
+  candidates: { displayName: string; canonicalId: string; launchKind: string; score: number }[]
+  selected: { displayName: string; canonicalId: string } | null
+  registrationSource: string | null
+  activationMethod: string | null
+  activationTarget: string | null
+  activationResult: 'ok' | { error: string } | null
+  observed: { pid: number; processName: string } | null
+  confidence: 'confirmed' | 'existing-instance' | 'unverified' | null
+  finalResult: 'launched' | 'accepted' | 'failed' | 'ambiguous' | 'not-installed'
+}
+
 export interface ToolDiagnostics {
   adapter?: 'darwin' | 'win32'
   durationMs?: number
   exitCode?: number | null
   stderr?: string
+  /** open_app's full resolution+launch record — see main/apps/types.ts's LaunchTrace. */
+  launchTrace?: LaunchTrace
 }
 
 export interface ToolActivityEntry {

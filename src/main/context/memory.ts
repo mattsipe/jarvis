@@ -3,9 +3,10 @@ import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { readFileSync, writeFileSync } from 'fs'
 import { logInfo } from '../logger'
+import { matchLegacyAliasToApp, type CatalogAppRef } from './aliasMigration'
 import type { PersistentContext } from './types'
 
-export type MemoryKind = 'preference' | 'alias' | 'person' | 'project' | 'routine' | 'device' | 'task' | 'fact' | 'learned'
+export type MemoryKind = 'preference' | 'person' | 'project' | 'routine' | 'device' | 'task' | 'fact' | 'learned'
 export type MemorySource = 'explicit' | 'learned'
 
 export interface MemoryRecord {
@@ -30,7 +31,6 @@ interface MemoryFile {
 }
 
 const LEARNED_ALWAYS_ON_THRESHOLD = 0.7
-const ALWAYS_ON_MAX_ALIASES = 20
 const ALWAYS_ON_MAX_PREFERENCES = 12
 const ALWAYS_ON_MAX_PEOPLE_PROJECTS = 6
 
@@ -189,15 +189,6 @@ export class MemoryStore {
     return scored.map((s) => s.record)
   }
 
-  /** Subject (lowercase) -> canonical target. Powers apps/resolver.ts's alias lookup. */
-  aliases(): Map<string, string> {
-    const map = new Map<string, string>()
-    for (const r of this.records) {
-      if (r.kind === 'alias') map.set(r.subject.toLowerCase(), r.content)
-    }
-    return map
-  }
-
   /**
    * Compact, cheap-to-read block for every turn's system prompt (its own
    * cache breakpoint in agent/loop.ts, separate from the persona and the
@@ -207,11 +198,6 @@ export class MemoryStore {
    */
   alwaysOnBlock(): string {
     const lines: string[] = []
-
-    const aliasRecords = this.records.filter((r) => r.kind === 'alias').slice(0, ALWAYS_ON_MAX_ALIASES)
-    if (aliasRecords.length > 0) {
-      lines.push(`Aliases: ${aliasRecords.map((r) => `"${r.subject}" means ${r.content}`).join('; ')}.`)
-    }
 
     const preferenceRecords = this.records
       .filter((r) => r.kind === 'preference' && this.isAlwaysOnEligible(r))
@@ -242,8 +228,14 @@ export class MemoryStore {
    * persistent.migratedToMemory first — see context/index.ts.
    */
   migrateFromPersistentContext(persistent: PersistentContext): void {
+    // These become plain preference text, never a structured app
+    // preference — this legacy field predates the app-launch rebuild and
+    // has no canonicalId to check against the catalog. Anything here that
+    // happens to reference a real installed app is picked up by
+    // migrateLegacyAppAliases() below on the very next call, same as any
+    // other pre-rebuild 'alias' record.
     for (const [subject, content] of Object.entries(persistent.appAliases)) {
-      this.upsert({ kind: 'alias', subject, content, source: 'explicit' })
+      this.upsert({ kind: 'preference', subject, content, source: 'explicit' })
     }
     for (const [subject, content] of Object.entries(persistent.preferences)) {
       this.upsert({ kind: 'preference', subject, content: String(content), source: 'explicit' })
@@ -258,6 +250,45 @@ export class MemoryStore {
       this.upsert({ kind: 'learned', subject, content: String(content), source: 'learned', confidence: 0.6 })
     }
     logInfo('memory', `migrated legacy PersistentContext fields into memory.json (${this.records.length} records total)`)
+  }
+
+  /**
+   * One-time move off the 'alias' memory kind, retired because it let app-
+   * preference PROSE ("Outlook means new Outlook, not classic") become a
+   * literal launch target — see apps/launchApp.ts, which never reads
+   * memory at all now, and the plan's root-cause writeup for the real-PC
+   * regression this traces to.
+   *
+   * Every old 'alias' record becomes a plain 'preference' record (still
+   * visible to Claude in the always-on block, never launched); if its
+   * content exactly matches a currently-installed app's canonicalId or
+   * display name, a real, catalog-checked AppPreference is also created
+   * via `setPreference` so the ranking boost isn't lost for the common
+   * case — but a record whose content is free text (the confirmed
+   * regression shape) simply has no match and stays inert prose, exactly
+   * as it should.
+   *
+   * Called once at startup, after the catalog has already loaded its
+   * cache — see main/index.ts.
+   */
+  migrateLegacyAppAliases(catalog: CatalogAppRef[], setPreference: (query: string, canonicalId: string) => void): void {
+    // TypeScript no longer allows 'alias' in MemoryKind, but records
+    // loaded from an older memory.json can still carry it — hence the
+    // string cast rather than a type-narrowed filter.
+    const legacyAliases = this.records.filter((r) => (r.kind as string) === 'alias')
+    if (legacyAliases.length === 0) return
+    let matched = 0
+    for (const r of legacyAliases) {
+      const canonicalId = matchLegacyAliasToApp({ subject: r.subject, content: r.content }, catalog)
+      if (canonicalId) {
+        setPreference(r.subject, canonicalId)
+        matched++
+      }
+      r.kind = 'preference'
+      r.updatedAt = now()
+    }
+    this.scheduleSave()
+    logInfo('memory', `migrated ${legacyAliases.length} legacy 'alias' record(s) to preferences (${matched} matched a real installed app)`)
   }
 }
 

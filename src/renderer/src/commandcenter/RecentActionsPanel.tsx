@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useToolStore } from '../state/toolStore'
+import { useToolStore, type LaunchTrace } from '../state/toolStore'
 import { Panel, EmptyState } from './Panel'
 
 const STATUS_COLOR: Record<string, string> = {
@@ -19,6 +19,32 @@ function formatArgs(input: unknown): string | null {
 interface SelfTestResult {
   ok: boolean
   message: string
+}
+
+/** Compact one-line summary of a launch trace, expandable to the full detail — see the App Launch Lab for the same trace shape rendered in full. */
+function LaunchTraceDetail({ trace }: { trace: LaunchTrace }): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <div style={{ fontSize: 10, opacity: 0.55 }}>
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        style={{ fontFamily: 'inherit', fontSize: 10, background: 'none', border: 'none', color: 'var(--jarvis-cyan)', opacity: 0.85, cursor: 'pointer', padding: 0 }}
+      >
+        {expanded ? 'Hide launch details' : 'Show launch details'}
+      </button>
+      {expanded && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, marginTop: 3, paddingLeft: 6, borderLeft: '1px solid var(--jarvis-hairline)' }}>
+          <div>Preference: {trace.preference.status === 'none' ? 'none' : `${trace.preference.canonicalId} (${trace.preference.status})`}</div>
+          <div>Candidates: {trace.candidates.map((c) => `${c.displayName} (${c.score})`).join(', ') || 'none'}</div>
+          <div>Selected: {trace.selected?.displayName ?? '—'}</div>
+          <div>Activation: {trace.activationMethod ?? '—'} → {trace.activationTarget ?? '—'}</div>
+          <div>Result: {trace.activationResult === null ? '—' : trace.activationResult === 'ok' ? 'ok' : `error: ${trace.activationResult.error}`}</div>
+          <div>Observed: {trace.observed ? `pid ${trace.observed.pid} (${trace.observed.processName})` : '—'}</div>
+          <div>Confidence: {trace.confidence ?? '—'}</div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 /**
@@ -100,6 +126,7 @@ export default function RecentActionsPanel(): React.JSX.Element {
                     .join(' · ')}
                 </div>
               )}
+              {d?.launchTrace && <LaunchTraceDetail trace={d.launchTrace} />}
             </div>
           )
         })}

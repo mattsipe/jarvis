@@ -1,3 +1,5 @@
+import type { InstalledApplication, LaunchOutcome, LaunchTrace } from '../apps/types'
+
 export interface ToolDiagnostics {
   /** Which platform adapter actually ran this — filled in by ToolRegistry.execute, not the adapter itself. */
   adapter?: 'darwin' | 'win32'
@@ -8,8 +10,8 @@ export interface ToolDiagnostics {
   exitCode?: number | null
   /** Captured stderr (or the closest equivalent), truncated — never secret material, just OS/PowerShell error text. */
   stderr?: string
-  /** open_app's full candidate-fallback trail (see apps/launcher.ts) — kept out of `message`/Recent Actions, available for the log and a diagnostics view. */
-  launchAttempts?: { displayName: string; kind: string; ok: boolean; message: string }[]
+  /** open_app's full resolution+launch record — see apps/types.ts's LaunchTrace and the App Launch Lab, which renders this directly. Kept out of `message`/Recent Actions (shown behind an expandable detail), always written to the log. */
+  launchTrace?: LaunchTrace
 }
 
 export interface ToolResult {
@@ -43,7 +45,6 @@ export interface SystemStatusInfo {
  */
 export interface PlatformControl {
   readonly name: 'darwin' | 'win32'
-  openApp(nameOrPath: string): Promise<ToolResult>
   closeApp(name: string): Promise<ToolResult>
   openUrl(url: string): Promise<ToolResult>
   setVolume(percent: number): Promise<ToolResult>
@@ -57,21 +58,27 @@ export interface PlatformControl {
   /** Runs a battery of adapter-specific capability checks with no user-visible side effect — see the Command Center's "Run Self-Test". */
   selfTest(): Promise<ToolResult>
   /**
-   * All installed/launchable apps this adapter can enumerate — feeds
-   * apps/catalog.ts. Windows: Get-StartApps' {Name, AppID}, plus `isPath`
-   * (via Test-Path) telling the catalog whether that AppID is launchable
-   * directly (Start-Process) or needs shell:AppsFolder activation — a real
-   * UWP AppUserModelID and a Click-to-Run-style Office AppID
-   * ("Microsoft.Office.EXCEL.EXE.15") both need the latter despite looking
-   * completely different, which is why this is asked of Windows directly
-   * rather than guessed from the AppID's shape. macOS: /Applications +
-   * ~/Applications, AppID === display name (launched via `open -a`,
-   * always `isPath: true` since there's no AppsFolder-style activation
-   * distinct from openApp() on this platform).
+   * Every installed/launchable app this adapter can enumerate, each
+   * already carrying its own canonical launch identity — feeds
+   * apps/catalog.ts, which is the ONLY place allowed to mint a
+   * CanonicalAppId (see apps/types.ts). Windows: Get-StartApps' AppID is
+   * already the exact string Windows itself uses to launch that entry
+   * (a real path, or an AppsFolder parsing name/AUMID — Click-to-Run
+   * Office apps and true UWP apps both fall in the latter category
+   * despite looking nothing alike, which is why `launchKind` is derived
+   * from Test-Path, not the string's shape). macOS: /Applications +
+   * ~/Applications, launched via `open -a` (always `desktop-path`-like —
+   * see darwin.ts).
    */
-  listInstalledApps(): Promise<{ name: string; appId: string; isPath: boolean }[]>
-  /** Launches a packaged/UWP/Click-to-Run app via shell:AppsFolder activation, by its AppID (Windows: `PackageFamilyName!AppId` for true UWP, or a Click-to-Run-style AppID like Office's). Not meaningful on macOS. */
-  launchByAppId(appId: string): Promise<ToolResult>
+  listInstalledApps(): Promise<InstalledApplication[]>
+  /**
+   * Launches an already-resolved catalog entry and reports what actually
+   * happened — never a raw string. See apps/types.ts's LaunchOutcome for
+   * why "the native call succeeded but couldn't be confirmed" is
+   * deliberately distinct from "it failed": only a real native/OS error
+   * ever produces `{status:'failed'}`.
+   */
+  launchInstalledApp(app: InstalledApplication): Promise<LaunchOutcome>
 }
 
 export class UnsupportedFeatureError extends Error {}

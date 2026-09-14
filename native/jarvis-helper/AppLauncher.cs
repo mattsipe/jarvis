@@ -1,92 +1,57 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
 
 namespace JarvisHelper;
 
 /// <summary>
-/// The real Windows AppUserModelID activation API
-/// (IApplicationActivationManager, documented in shobjidl.h) — the same
-/// mechanism Explorer itself uses internally for "shell:AppsFolder\..."
-/// navigation, called directly via COM instead of shelling out to
-/// explorer.exe. Well-known, stable GUIDs (unchanged since Windows 8).
-/// </summary>
-[Flags]
-internal enum ActivateOptions
-{
-    None = 0x00000000,
-    NoErrorUI = 0x00000002,
-    NoSplashScreen = 0x00000004
-}
-
-[ComImport]
-[Guid("2E941141-7F97-4756-BA1D-9DECDE894A3D")]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IApplicationActivationManager
-{
-    [PreserveSig]
-    int ActivateApplication(
-        [MarshalAs(UnmanagedType.LPWStr)] string appUserModelId,
-        [MarshalAs(UnmanagedType.LPWStr)] string? arguments,
-        ActivateOptions options,
-        out uint processId);
-}
-
-[ComImport]
-[Guid("45BA127D-10A8-46EA-8AB7-56EA9078943C")]
-internal class ApplicationActivationManagerClass
-{
-}
-
-/// <summary>
 /// Native app launching — used by windows.ts in place of PowerShell
-/// Start-Process/explorer.exe shell:AppsFolder wherever the helper is
-/// running (falls back to PowerShell only if it isn't — see
-/// platform/helper.ts). Both paths here give a real, synchronous
-/// success/failure signal: Process.Start throws a Win32Exception with a
-/// specific reason on failure, and ActivateApplication's HRESULT is
-/// checked explicitly — neither depends on guessing from a shell
-/// command's exit code the way Start-Process/explorer.exe did, which is
-/// exactly what let "resolved but didn't actually launch" bugs (Excel,
-/// and — per real-PC report — New Outlook) go unnoticed at the
-/// PowerShell layer.
+/// Start-Process/explorer.exe. A real-PC regression traced two distinct
+/// bugs to the previous version of this file:
+///
+/// 1. AppsFolder targets (packaged/UWP apps, and Click-to-Run Office
+///    AppIDs like "Microsoft.Office.EXCEL.EXE.15") were activated via
+///    IApplicationActivationManager::ActivateApplication — the correct
+///    contract for a true packaged app's activation handshake, but the
+///    WRONG one for a Click-to-Run desktop app, which never answers that
+///    handshake. The call could block for the full helper timeout before
+///    failing, even though Windows had already started EXCEL.EXE fine.
+///    Fixed by using plain ShellExecute on the "shell:AppsFolder\&lt;id&gt;"
+///    virtual shell path instead — exactly what Explorer/Start do when
+///    you click an AppsFolder item, and exactly what
+///    "explorer.exe shell:AppsFolder\..." did before, just done in-process
+///    via ProcessStartInfo/UseShellExecute instead of shelling out to
+///    explorer.exe. This removes the custom COM activation contract
+///    entirely, along with its failure mode.
+/// 2. That blocking call, combined with Program.cs's old one-request-at-a-
+///    time read loop, could delay unrelated requests queued behind it.
+///    Program.cs now dispatches every request on its own thread, so this
+///    is defended in depth even though the ShellExecute-only path above
+///    should no longer block noticeably at all.
+///
+/// Both launch kinds (a real path, or an AppsFolder id) now return
+/// through the same method, which also drives process-identity
+/// observation (ProcessObserver.cs) — never "any new window", which
+/// can't tell one app's launch from another's and misses an app (like
+/// Office) reusing an already-running instance.
 /// </summary>
 internal static class AppLauncher
 {
-    /// <summary>
-    /// A real filesystem target: a .exe, a .lnk shortcut, or anything
-    /// else Windows has a shell association for. UseShellExecute=true
-    /// gives full ShellExecute semantics (shortcut resolution, file
-    /// associations, requested elevation), not just "spawn this exact
-    /// binary" — the same thing Explorer does when you double-click it,
-    /// unlike PowerShell's Start-Process which is close but not identical.
-    /// </summary>
-    internal static JsonObject LaunchExe(string path, string? arguments)
+    internal static JsonObject LaunchInstalledApp(string target, bool isPath, string? arguments, int observeTimeoutMs)
     {
-        var psi = new ProcessStartInfo(path) { UseShellExecute = true };
-        if (!string.IsNullOrEmpty(arguments)) psi.Arguments = arguments;
-        // Throws Win32Exception (e.g. "The system cannot find the file
-        // specified") on real failure — a specific, native reason, not a
-        // PowerShell CLIXML dump.
-        var process = Process.Start(psi);
-        // A null return isn't necessarily a failure: some shell
-        // associations hand off to an already-running instance via DDE
-        // and never give ShellExecute a process handle at all.
-        return new JsonObject { ["processId"] = process?.Id };
-    }
+        var before = ProcessObserver.Capture();
 
-    /// <summary>
-    /// A packaged/UWP/MSIX AppUserModelID — covers true UWP apps, Windows'
-    /// own built-in packaged apps (Settings, Calculator, ...), and
-    /// Click-to-Run-style Office AppIDs (Microsoft.Office.EXCEL.EXE.15 and
-    /// siblings), all of which activate through this same API regardless
-    /// of which of those categories they fall into.
-    /// </summary>
-    internal static JsonObject LaunchAumid(string appUserModelId)
-    {
-        var manager = (IApplicationActivationManager)new ApplicationActivationManagerClass();
-        var hr = manager.ActivateApplication(appUserModelId, null, ActivateOptions.None, out var processId);
-        if (hr != 0) Marshal.ThrowExceptionForHR(hr);
-        return new JsonObject { ["processId"] = (long)processId };
+        var psi = isPath
+            ? new ProcessStartInfo(target) { UseShellExecute = true }
+            : new ProcessStartInfo("shell:AppsFolder\\" + target) { UseShellExecute = true };
+        if (!string.IsNullOrEmpty(arguments)) psi.Arguments = arguments;
+
+        // Throws (Win32Exception, a specific native reason like "The
+        // system cannot find the file specified") on real failure — never
+        // silently swallowed the way a shell command's exit code can be.
+        Process.Start(psi);
+
+        var expectedImageName = isPath ? Path.GetFileNameWithoutExtension(target) : null;
+        var expectedAumid = isPath ? null : target;
+        return ProcessObserver.Observe(before, expectedImageName, expectedAumid, observeTimeoutMs);
     }
 }

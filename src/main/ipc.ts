@@ -9,6 +9,9 @@ import { runToolStandalone } from './tools'
 import { getBudgetStatus, setBudgetConfig, type BudgetConfig } from './usage'
 import { presence, type PresenceMicStatus } from './presence'
 import { contextManager } from './context'
+import { getCatalog } from './apps/catalog'
+import { resolveAppByName } from './apps/launchApp'
+import { appPreferences } from './apps/preferencesStore'
 import { config, getConfigDiagnostics, saveApiKeys } from './config'
 import { checkForUpdates, installUpdateAndRestart, getUpdateState } from './update/updater'
 
@@ -183,6 +186,20 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('memory:list', () => contextManager.memory.list())
   ipcMain.handle('memory:update', (_event, id: string, content: string) => contextManager.memory.update(id, { content }))
   ipcMain.handle('memory:delete', (_event, id: string) => contextManager.memory.remove(id))
+
+  // App Launch Lab (Command Center) — real-PC validation for the app-launch
+  // rebuild, self-contained in JARVIS rather than requiring PowerShell.
+  // 'apps:catalog' lists exactly what the resolver/launcher see;
+  // 'apps:resolve' runs the same resolution pipeline open_app uses but
+  // never launches anything (see apps/launchApp.ts's resolveAppByName);
+  // 'apps:launch' runs the real open_app tool end to end, through the
+  // same ToolRegistry.execute() path a voice call would (recordToolActivity
+  // included, so a Lab launch also shows up in Recent Actions).
+  ipcMain.handle('apps:catalog', () => getCatalog())
+  ipcMain.handle('apps:resolve', (_event, name: string) =>
+    resolveAppByName(name, { getCatalog: () => getCatalog(), getPreference: (q) => appPreferences.get(q) })
+  )
+  ipcMain.handle('apps:launch', (_event, name: string) => runToolStandalone('open_app', { name }))
 
   // Dev-only: lets automated/manual testing trigger the exact same code path
   // as the real hotkey, without needing OS Accessibility permission to

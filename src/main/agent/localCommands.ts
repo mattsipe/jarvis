@@ -23,9 +23,9 @@ function normalize(text: string): string {
  * confirmation), and open_app only matches when resolveApp is confident
  * (a single, unambiguous hit) — anything murkier (no match, or a genuine
  * tie) returns null so Claude handles it normally, including the
- * ask-once-then-remember alias flow. A false negative here just costs one
- * ordinary Claude turn; a false positive would silently do the wrong
- * thing, so patterns are kept tight rather than clever.
+ * ask-once-then-set_app_preference flow. A false negative here just
+ * costs one ordinary Claude turn; a false positive would silently do the
+ * wrong thing, so patterns are kept tight rather than clever.
  */
 export function matchLocalCommand(rawText: string): LocalCommandMatch | null {
   const text = normalize(rawText)
@@ -67,7 +67,7 @@ export function matchLocalCommand(rawText: string): LocalCommandMatch | null {
     if (resolution && !('ambiguous' in resolution)) {
       return { toolName: 'open_app', toolInput: { name }, spoken: `Opening ${resolution.entry.displayName}.` }
     }
-    return null // no confident catalog match — let Claude's open_app tool (and its ambiguity/alias flow) handle it
+    return null // no confident catalog match — let Claude's open_app tool (and its ambiguity/preference flow) handle it
   }
 
   return null

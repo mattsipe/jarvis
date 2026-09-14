@@ -148,7 +148,15 @@ class HelperClient {
     else call.reject(new Error(parsed.error ?? 'jarvis-helper.exe reported an error with no message.'))
   }
 
-  private call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  /**
+   * `timeoutMs` is per-call, not global — see Program.cs's class doc
+   * comment for why: every request is now dispatched on its own thread
+   * there, so one slow call (a launch's process-observation wait, up to
+   * ~10s by design) never blocks another request's response, and each
+   * kind of call can have a timeout that actually matches how long it's
+   * expected to take instead of one flat number for everything.
+   */
+  private call<T>(method: string, params: Record<string, unknown> = {}, timeoutMs = CALL_TIMEOUT_MS): Promise<T> {
     if (!this.ensureStarted() || !this.proc) {
       return Promise.reject(new Error('jarvis-helper.exe is not running.'))
     }
@@ -156,8 +164,8 @@ class HelperClient {
     return new Promise<T>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error(`jarvis-helper.exe call "${method}" timed out after ${CALL_TIMEOUT_MS}ms.`))
-      }, CALL_TIMEOUT_MS)
+        reject(new Error(`jarvis-helper.exe call "${method}" timed out after ${timeoutMs}ms.`))
+      }, timeoutMs)
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timeout })
       this.proc!.stdin.write(JSON.stringify({ id, method, params }) + '\n')
     })
@@ -200,26 +208,30 @@ class HelperClient {
   }
 
   /**
-   * ShellExecute a real filesystem target (.exe, .lnk, or anything else
-   * Windows has a shell association for) via native ProcessStartInfo —
-   * see AppLauncher.cs for why this replaces PowerShell's Start-Process
-   * as the primary path. Throws with a specific native reason (a real
-   * Win32Exception message, not a shell exit code) on real failure.
+   * Launches an installed app's real target — a filesystem path (real
+   * ShellExecute via .NET's ProcessStartInfo) or an AppsFolder parsing
+   * name/AUMID (ShellExecute on the `shell:AppsFolder\<id>` virtual shell
+   * path — the same thing Explorer/Start do, done in-process instead of
+   * shelling out to explorer.exe) — then watches for the resulting
+   * process by identity (image name for a path target, AppUserModelID for
+   * an AppsFolder target), never by "any new window". See AppLauncher.cs
+   * and ProcessObserver.cs. Given a generous timeout since it's dispatched
+   * on its own thread in the helper (see Program.cs) and can't block any
+   * other call — a slow-observing launch here never delays, say, the
+   * foreground-window check driving live context.
    */
-  launchExe(path: string, args?: string): Promise<{ processId: number | null }> {
-    return this.call('launchExe', { path, arguments: args ?? '' })
-  }
-
-  /**
-   * Activate a packaged/UWP/MSIX AppUserModelID via the real Windows
-   * activation API (IApplicationActivationManager) — see AppLauncher.cs.
-   * Covers true UWP apps, Windows' own built-in packaged apps, and
-   * Click-to-Run-style Office AppIDs alike; replaces
-   * `explorer.exe shell:AppsFolder\...`, which can report success even
-   * when the target silently failed to activate.
-   */
-  launchAumid(appUserModelId: string): Promise<{ processId: number }> {
-    return this.call('launchAumid', { appUserModelId })
+  launchInstalledApp(params: {
+    target: string
+    isPath: boolean
+    arguments?: string
+    observeTimeoutMs?: number
+  }): Promise<{ confidence: 'confirmed' | 'existing-instance' | 'unverified'; pid?: number; processName?: string }> {
+    const observeTimeoutMs = params.observeTimeoutMs ?? 8000
+    return this.call(
+      'launchInstalledApp',
+      { target: params.target, isPath: params.isPath, arguments: params.arguments ?? '', observeTimeoutMs },
+      observeTimeoutMs + 5000
+    )
   }
 
   /** Called once at app shutdown — best-effort, never blocks quitting. */

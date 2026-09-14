@@ -17,17 +17,28 @@ namespace JarvisHelper;
 /// Start Menu/packaged-app enumeration deliberately stays on the existing
 /// Get-StartApps PowerShell path (windows.ts) — it's already correct and
 /// only runs at startup plus daily, so its latency doesn't matter.
+///
+/// Each request is now dispatched onto its own thread-pool task rather
+/// than handled inline in the read loop — a real-PC regression found that
+/// a slow/blocked launch call (see AppLauncher.cs's class doc comment)
+/// held up every other pending request behind it on the same pipe,
+/// including the next launch call and the live foreground-window/cursor
+/// query the conversational turn was waiting on. Output is still only
+/// ever written under `OutputLock`, since interleaved partial JSON lines
+/// from two threads writing at once would corrupt the protocol.
 /// </summary>
 public static class Program
 {
-    [STAThread]
+    private static readonly object OutputLock = new();
+
     public static void Main()
     {
         string? line;
         while ((line = Console.In.ReadLine()) != null)
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
-            HandleLine(line);
+            var capturedLine = line;
+            _ = Task.Run(() => HandleLine(capturedLine));
         }
     }
 
@@ -58,8 +69,11 @@ public static class Program
         "audioSetVolume" => Audio.SetVolume(RequireDouble(p, "percent")),
         "audioSetMute" => Audio.SetMute(RequireBool(p, "muted")),
         "steamCatalog" => SteamCatalog.Get(),
-        "launchExe" => AppLauncher.LaunchExe(RequireString(p, "path"), OptionalString(p, "arguments")),
-        "launchAumid" => AppLauncher.LaunchAumid(RequireString(p, "appUserModelId")),
+        "launchInstalledApp" => AppLauncher.LaunchInstalledApp(
+            RequireString(p, "target"),
+            RequireBool(p, "isPath"),
+            OptionalString(p, "arguments"),
+            (int)(p?["observeTimeoutMs"]?.GetValue<long>() ?? 8000)),
         _ => throw new InvalidOperationException($"Unknown method: {method}")
     };
 
@@ -83,7 +97,11 @@ public static class Program
         var obj = new JsonObject { ["id"] = id, ["ok"] = ok };
         if (ok) obj["result"] = result;
         else obj["error"] = error;
-        Console.Out.WriteLine(obj.ToJsonString());
-        Console.Out.Flush();
+        var text = obj.ToJsonString();
+        lock (OutputLock)
+        {
+            Console.Out.WriteLine(text);
+            Console.Out.Flush();
+        }
     }
 }

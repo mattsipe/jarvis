@@ -20,7 +20,7 @@ export interface PersistentContext {
     lon?: number
   }
   devices: string[]
-  /** @deprecated Superseded by MemoryStore's 'alias' records (context/memory.ts) — kept only so migrateFromPersistentContext() has a one-time source to read from. */
+  /** @deprecated Superseded by apps/preferences.ts's structured, catalog-checked AppPreference records — kept only so migrateFromPersistentContext() has a one-time source to read from. */
   appAliases: Record<string, string>
   /** @deprecated Superseded by MemoryStore's 'routine' records. */
   routines: Array<{ name: string; description: string }>

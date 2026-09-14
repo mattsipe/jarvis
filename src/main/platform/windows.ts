@@ -4,9 +4,10 @@ import { existsSync } from 'fs'
 import { app } from 'electron'
 import { join } from 'path'
 import os from 'os'
-import { logError, logInfo } from '../logger'
+import { logError } from '../logger'
 import { jarvisHelper } from './helper'
 import { stripCliXml } from './cliXml'
+import { mintCanonicalId, type InstalledApplication, type LaunchOutcome } from '../apps/types'
 import type { PlatformControl, SystemStatusInfo, ToolResult } from './types'
 
 const execFileAsync = promisify(execFile)
@@ -51,21 +52,6 @@ class PowerShellError extends Error {
  *    every volume/mute call with a parse error. Fixed by wrapping the C#
  *    in a *single*-quoted PowerShell string instead (it contains no
  *    apostrophes, so it needs no escaping at all).
- * 3. `openApp`'s AppID classification assumed only true UWP/packaged apps
- *    need `shell:AppsFolder` (detected by a `!` in the AppID) and every
- *    other AppID is a real filesystem path safe for `Start-Process`. A
- *    real-PC test with "open Excel" disproved that: Office's Click-to-Run
- *    AppIDs (`Microsoft.Office.EXCEL.EXE.15` and siblings for Word,
- *    PowerPoint, etc.) are neither `!`-shaped nor a real path — they only
- *    resolve through the same `shell:AppsFolder` activation Explorer uses
- *    for genuinely packaged apps. Fixed by asking Windows directly
- *    (`Test-Path` on the AppID) instead of guessing from its shape — see
- *    resolveStartApp() and apps/catalog.ts, which classifies the catalog
- *    the same way. Launches are now also verified (a new window actually
- *    appearing, via the helper's window list) rather than trusting that
- *    `shell:AppsFolder`/`Start-Process` returning success means the target
- *    really opened — `explorer.exe shell:AppsFolder\...` in particular can
- *    report success even when the target silently failed to activate.
  *
  * Everything else here is hardening so the next real-Windows run reports
  * an exact cause instead of a bare failure: explicit (non-PATH-dependent)
@@ -74,30 +60,27 @@ class PowerShellError extends Error {
  * Recent Actions/Claude, only the log file), and a self-test tool that
  * exercises each capability directly (see selfTest()).
  *
- * 4. Real-PC testing then reported New Outlook resolving but failing to
- *    launch, treated as a regression from an earlier working release.
- *    Re-auditing the code found the same *class* of bug as #3 one layer
- *    up: apps/resolver.ts's alias lookup, when a previously-saved alias's
- *    target no longer matches anything in the current catalog snapshot
- *    (catalog staleness, or a rename upstream), fell back to treating the
- *    saved value as a literal path/exe name safe for Start-Process — but
- *    a saved AUMID-shaped alias (New Outlook's is a true UWP AUMID,
- *    "PackageFamilyName!App") is not a path either. Fixed in resolveApp()
- *    below by classifying the orphaned alias target by its own shape
- *    (contains `!`  → packaged) instead of assuming 'shortcut'. Launching
- *    itself was also hardened at the same time, generally rather than for
- *    Outlook specifically: openApp()/launchByAppId() now call
- *    jarvis-helper.exe's native launchExe/launchAumid (ProcessStartInfo/
- *    ShellExecute and the real IApplicationActivationManager COM API,
- *    respectively — see AppLauncher.cs) as the primary mechanism, since
- *    both give a real, specific success/failure signal instead of a shell
- *    exit code that only ever means "the command was accepted". PowerShell
- *    Start-Process/explorer.exe shell:AppsFolder remain the fallback only
- *    for when the helper itself isn't running. On top of that,
- *    apps/launcher.ts now tries more than one discovered candidate for the
- *    same requested name (e.g. an app registered both in Start Menu and in
- *    the App Paths registry) before giving up, and remembers whichever one
- *    actually worked as an alias so the next launch skips straight to it.
+ * App launching was rebuilt from first principles after three rounds of
+ * per-symptom patches (Excel's Click-to-Run AppID, then New Outlook)
+ * still didn't hold up on a real PC — see the plan's root-cause writeup.
+ * The actual causes were: (a) a natural-language app *preference*
+ * ("Outlook means new Outlook, not classic") had no type boundary
+ * stopping it from being launched as a literal string once saved to
+ * memory — fixed by removing memory/aliases from the launch path
+ * entirely (see apps/launchApp.ts, apps/preferences.ts); (b)
+ * `IApplicationActivationManager`, the wrong activation contract for a
+ * desktop/Click-to-Run app, could block the single-threaded helper long
+ * enough to time out — fixed by using plain ShellExecute on the
+ * `shell:AppsFolder\<id>` virtual path instead (see AppLauncher.cs), and
+ * by dispatching every helper request on its own thread (Program.cs) so
+ * one slow call can never block another; (c) verification watched for
+ * "any new window", which misses an app (like Office) reusing an already-
+ * running instance and can't tell one app's launch from another's —
+ * fixed by watching for the expected *process* instead, by image name or
+ * AppUserModelID (see ProcessObserver.cs). `listInstalledApps()` now
+ * returns fully-formed `InstalledApplication` records (apps/types.ts) and
+ * `launchInstalledApp()` takes one of those records, never a raw string —
+ * see platform/types.ts's PlatformControl for why.
  */
 export class WindowsPlatformControl implements PlatformControl {
   readonly name = 'win32' as const
@@ -168,212 +151,69 @@ export class WindowsPlatformControl implements PlatformControl {
   }
 
   /**
-   * Resolves a display name (e.g. "Steam", "Chrome", "Excel") to a Start
-   * Menu AppID via Get-StartApps, along with whether that AppID is
-   * actually a real filesystem path — see the class doc comment's bug #3
-   * for why this can't be inferred from the AppID's shape (a `!` in it)
-   * alone.
+   * The full app catalog, straight from the OS's own registration — every
+   * entry's AppID is already exactly what Windows uses internally to
+   * launch it, so `canonicalId`/`appId` here are simply that string,
+   * never guessed or reconstructed. `isPath` (via Test-Path) is the only
+   * thing that has to be asked of Windows rather than read directly, and
+   * it's asked here, not inferred from the string's shape — a real UWP
+   * AppUserModelID and a Click-to-Run Office AppID
+   * ("Microsoft.Office.EXCEL.EXE.15") look nothing alike but both need
+   * the same non-path (`aumid`) launch treatment. See apps/catalog.ts,
+   * which is the only place these get turned into `InstalledApplication`
+   * records with a minted `CanonicalAppId`.
    */
-  private async resolveStartApp(name: string): Promise<{ name: string; appId: string; isPath: boolean } | null> {
-    const script = `Get-StartApps | Where-Object { $_.Name -like ${this.psQuote(`*${name}*`)} } | Select-Object -First 1 -Property Name, AppID, @{Name='IsPath';Expression={ [bool](Test-Path -LiteralPath $_.AppID -ErrorAction SilentlyContinue) }} | ConvertTo-Json -Compress`
-    try {
-      const out = await this.runPowerShell(script)
-      if (!out) return null
-      const parsed = JSON.parse(out) as { Name: string; AppID: string; IsPath: boolean }
-      return { name: parsed.Name, appId: parsed.AppID, isPath: parsed.IsPath }
-    } catch {
-      return null
-    }
-  }
-
-  /**
-   * Best-effort confirmation a launch actually resulted in a new window —
-   * see the class doc comment's bug #3. `explorer.exe shell:AppsFolder\...`
-   * in particular can report success (exit 0) even when the target
-   * silently failed to activate, since the command is just handed off to
-   * an already-running Explorer process asynchronously. Never turns a real
-   * launch into a reported failure just because the app is slow to open a
-   * window (some take a while, or start minimized/in the tray) — it only
-   * softens an unqualified "Opened X" into an honest "sent the command,
-   * but no new window showed up yet" when nothing appeared in time.
-   */
-  private async snapshotWindowHwnds(): Promise<Set<number>> {
-    try {
-      const { windows } = await jarvisHelper.listWindows()
-      return new Set(windows.map((w) => w.hwnd))
-    } catch {
-      return new Set()
-    }
-  }
-
-  /**
-   * Packaged/UWP apps (New Outlook in particular — WebView2-based, often
-   * slow on a cold start) get a longer verification window than a plain
-   * exe. Never turns a real launch into a reported failure either way —
-   * see the comment above — this only affects how long the softer
-   * "no new window appeared yet" wording is deferred.
-   */
-  private static readonly PACKAGED_VERIFY_TIMEOUT_MS = 9000
-
-  private async verifyNewWindowAppeared(beforeHwnds: Set<number>, timeoutMs = 4000): Promise<{ appeared: boolean; title?: string }> {
-    const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 500))
-      try {
-        const { windows } = await jarvisHelper.listWindows()
-        const newWindow = windows.find((w) => !beforeHwnds.has(w.hwnd))
-        if (newWindow) {
-          logInfo('platform:windows', `launch verified: new window "${newWindow.title || newWindow.processName}"`)
-          return { appeared: true, title: newWindow.title || newWindow.processName }
-        }
-      } catch {
-        return { appeared: false } // helper unavailable — can't verify, don't block the result on it
-      }
-    }
-    logInfo('platform:windows', `launch verification timed out after ${timeoutMs}ms — no new window seen (may just be slow to start)`)
-    return { appeared: false }
-  }
-
-  /**
-   * The real ShellExecute/CreateProcess mechanism via jarvis-helper.exe
-   * (see AppLauncher.cs) — primary path, since unlike Start-Process it
-   * throws a specific native reason on real failure. Falls back to
-   * PowerShell Start-Process only when the helper genuinely isn't
-   * running; if the helper IS running and the call itself throws, that's
-   * a real failure and is allowed to propagate so the caller (a candidate
-   * fallback loop, or this method's own catch) can react to it.
-   */
-  private async launchExeNative(target: string): Promise<void> {
-    try {
-      await jarvisHelper.launchExe(target)
-    } catch (err) {
-      if (jarvisHelper.isRunning()) throw err
-      await this.runPowerShell(`Start-Process ${this.psQuote(target)}`)
-    }
-  }
-
-  /** Same fallback shape as launchExeNative, for the AUMID activation API. */
-  private async launchAumidNative(appId: string): Promise<void> {
-    try {
-      await jarvisHelper.launchAumid(appId)
-    } catch (err) {
-      if (jarvisHelper.isRunning()) throw err
-      await this.runPowerShell(`explorer.exe shell:AppsFolder\\${appId}`)
-    }
-  }
-
-  async openApp(nameOrPath: string): Promise<ToolResult> {
-    const beforeHwnds = await this.snapshotWindowHwnds()
-    try {
-      await this.launchExeNative(nameOrPath)
-      const verified = await this.verifyNewWindowAppeared(beforeHwnds)
-      return verified.appeared
-        ? { ok: true, message: `Opened ${nameOrPath}.` }
-        : { ok: true, message: `Sent the command to open ${nameOrPath}, but no new window appeared yet — it may still be starting.` }
-    } catch (primaryErr) {
-      const resolved = await this.resolveStartApp(nameOrPath)
-      if (!resolved) return this.failure(`open "${nameOrPath}"`, primaryErr)
-      // Get-StartApps' AppID only works as a direct launch target when
-      // it's a real filesystem path (an ordinary desktop shortcut/exe).
-      // Anything else — a true UWP AppUserModelID ("PackageFamilyName!AppId")
-      // *or* a Click-to-Run-style AppID that isn't `!`-shaped at all
-      // (Office apps: "Microsoft.Office.EXCEL.EXE.15" and siblings are the
-      // confirmed real-world case) — needs AUMID activation instead, the
-      // same mechanism Explorer itself uses for both. Verified with
-      // Test-Path rather than guessed from the AppID's shape.
-      try {
-        if (!resolved.isPath) await this.launchAumidNative(resolved.appId)
-        else await this.launchExeNative(resolved.appId)
-        const verified = await this.verifyNewWindowAppeared(
-          beforeHwnds,
-          resolved.isPath ? 4000 : WindowsPlatformControl.PACKAGED_VERIFY_TIMEOUT_MS
-        )
-        return verified.appeared
-          ? { ok: true, message: `Opened ${resolved.name}.` }
-          : { ok: true, message: `Sent the command to open ${resolved.name}, but no new window appeared yet — it may still be starting.` }
-      } catch (fallbackErr) {
-        return this.failure(`launch ${resolved.name}`, fallbackErr)
-      }
-    }
-  }
-
-  /** Launches a packaged/UWP/Click-to-Run app directly by its already-known AppUserModelID — used by apps/launcher.ts once an app has been catalogued, skipping the name-guessing openApp() above entirely. See the class doc comment's bugs #3 and #4. */
-  async launchByAppId(appId: string): Promise<ToolResult> {
-    const beforeHwnds = await this.snapshotWindowHwnds()
-    try {
-      await this.launchAumidNative(appId)
-      const verified = await this.verifyNewWindowAppeared(beforeHwnds, WindowsPlatformControl.PACKAGED_VERIFY_TIMEOUT_MS)
-      return verified.appeared
-        ? { ok: true, message: `Opened ${verified.title ?? 'it'}.` }
-        : { ok: true, message: 'Sent the command to open it, but no new window appeared yet — it may still be starting.' }
-    } catch (err) {
-      return this.failure('open that app', err)
-    }
-  }
-
-  /**
-   * Second discovery source for the app catalog, alongside Get-StartApps
-   * below — the "App Paths" registry, which maps a friendly exe name
-   * directly to a verified filesystem path (Test-Path-checked here, same
-   * as the Start Menu source). Kept as genuinely separate candidate
-   * entries rather than merged into the Start-Menu ones for the same
-   * name, since this is what gives apps/launcher.ts an independent,
-   * differently-launched fallback candidate for the same app — see the
-   * class doc comment's bug #4. Best-effort: an empty/missing key (or a
-   * PowerShell failure) just means the catalog falls back to Start Menu
-   * alone, which was already a complete, correct catalog before this was
-   * added.
-   */
-  private async listAppPathsEntries(): Promise<{ name: string; appId: string; isPath: boolean }[]> {
-    const script = `
-Get-ChildItem 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths' -ErrorAction SilentlyContinue | ForEach-Object {
-  $p = (Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue).'(default)'
-  if ($p -and (Test-Path -LiteralPath $p -ErrorAction SilentlyContinue)) {
-    [pscustomobject]@{ Name = ($_.PSChildName -replace '\\.exe$',''); AppID = $p; IsPath = $true }
-  }
-} | ConvertTo-Json -Compress
-`.replace(/\r?\n/g, ' ')
-    try {
-      const out = await this.runPowerShell(script)
-      if (!out) return []
-      const parsed = JSON.parse(out) as { Name: string; AppID: string; IsPath: boolean } | { Name: string; AppID: string; IsPath: boolean }[]
-      const list = Array.isArray(parsed) ? parsed : [parsed]
-      return list.map((e) => ({ name: e.Name, appId: e.AppID, isPath: e.IsPath }))
-    } catch {
-      return []
-    }
-  }
-
-  /**
-   * Full app catalog (name + raw AppID + whether that AppID is a real
-   * filesystem path, for every entry) — see apps/catalog.ts, which uses
-   * `isPath` (not the AppID's shape) to decide how each app needs to be
-   * launched. Merges Get-StartApps with the App Paths registry above,
-   * deduped only on an exact (name, target) match so a genuinely
-   * different candidate for the same display name (e.g. a Start-Menu
-   * AUMID alongside an App-Paths exe) survives as a separate entry.
-   * Distinct from resolveStartApp(), which only needs the first
-   * Start-Menu match for the openApp() fallback above.
-   */
-  async listInstalledApps(): Promise<{ name: string; appId: string; isPath: boolean }[]> {
+  async listInstalledApps(): Promise<InstalledApplication[]> {
     const out = await this.runPowerShell(
       "Get-StartApps | Select-Object Name, AppID, @{Name='IsPath';Expression={ [bool](Test-Path -LiteralPath $_.AppID -ErrorAction SilentlyContinue) }} | ConvertTo-Json -Compress"
     )
-    const parsed = out
-      ? (JSON.parse(out) as { Name: string; AppID: string; IsPath: boolean } | { Name: string; AppID: string; IsPath: boolean }[])
-      : []
-    const startMenu = (Array.isArray(parsed) ? parsed : [parsed]).map((e) => ({ name: e.Name, appId: e.AppID, isPath: e.IsPath }))
+    if (!out) return []
+    const parsed = JSON.parse(out) as { Name: string; AppID: string; IsPath: boolean } | { Name: string; AppID: string; IsPath: boolean }[]
+    const list = Array.isArray(parsed) ? parsed : [parsed]
+    return list.map((e) => ({
+      canonicalId: mintCanonicalId(e.AppID),
+      displayName: e.Name,
+      registrationSource: 'appsfolder' as const,
+      launchKind: e.IsPath ? ('desktop-path' as const) : ('aumid' as const),
+      appId: e.AppID
+    }))
+  }
 
-    const appPaths = await this.listAppPathsEntries()
-    const seen = new Set(startMenu.map((e) => `${e.name.toLowerCase()}|${e.appId}`))
-    for (const entry of appPaths) {
-      const key = `${entry.name.toLowerCase()}|${entry.appId}`
-      if (!seen.has(key)) {
-        seen.add(key)
-        startMenu.push(entry)
+  /**
+   * Launches an already-resolved catalog entry via jarvis-helper.exe's
+   * native launchInstalledApp (real ShellExecute, plus process-identity
+   * observation — see helper.ts and AppLauncher.cs/ProcessObserver.cs).
+   * Only a real native/helper error becomes `{status:'failed'}`; the
+   * helper genuinely not running at all falls back to a best-effort
+   * PowerShell launch with no observation available (`unverified`) rather
+   * than failing outright.
+   */
+  async launchInstalledApp(appEntry: InstalledApplication): Promise<LaunchOutcome> {
+    const isPath = appEntry.launchKind === 'desktop-path'
+    try {
+      const result = await jarvisHelper.launchInstalledApp({ target: appEntry.appId, isPath, observeTimeoutMs: 8000 })
+      if (result.confidence === 'unverified' || result.pid == null || result.processName == null) {
+        return { status: 'accepted', confidence: 'unverified' }
+      }
+      return { status: 'launched', confidence: result.confidence, evidence: { pid: result.pid, processName: result.processName } }
+    } catch (err) {
+      if (jarvisHelper.isRunning()) {
+        return { status: 'failed', error: err instanceof Error ? err.message : String(err) }
+      }
+      // Helper isn't running at all — best-effort PowerShell fallback,
+      // with no process observation available (the whole point of the
+      // helper), so the outcome is honestly reported as unverified rather
+      // than claiming confirmation we don't have.
+      try {
+        if (isPath) await this.runPowerShell(`Start-Process ${this.psQuote(appEntry.appId)}`)
+        else await this.runPowerShell(`explorer.exe ${this.psQuote(`shell:AppsFolder\\${appEntry.appId}`)}`)
+        return { status: 'accepted', confidence: 'unverified' }
+      } catch (fallbackErr) {
+        const message =
+          fallbackErr instanceof PowerShellError ? fallbackErr.message : fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)
+        return { status: 'failed', error: message }
       }
     }
-    return startMenu
   }
 
   async closeApp(name: string): Promise<ToolResult> {

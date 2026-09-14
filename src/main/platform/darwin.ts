@@ -4,6 +4,7 @@ import { readdir } from 'fs/promises'
 import { app } from 'electron'
 import { join } from 'path'
 import os from 'os'
+import { mintCanonicalId, type InstalledApplication, type LaunchOutcome } from '../apps/types'
 import type { PlatformControl, SystemStatusInfo, ToolResult } from './types'
 
 const execFileAsync = promisify(execFile)
@@ -43,15 +44,6 @@ async function listInstalledApps(): Promise<string[]> {
  */
 export class DarwinPlatformControl implements PlatformControl {
   readonly name = 'darwin' as const
-
-  async openApp(nameOrPath: string): Promise<ToolResult> {
-    try {
-      await execFileAsync('open', ['-a', nameOrPath])
-      return { ok: true, message: `Opened ${nameOrPath}.` }
-    } catch (err) {
-      return { ok: false, message: `Couldn't open ${nameOrPath}: ${(err as Error).message}` }
-    }
-  }
 
   async closeApp(name: string): Promise<ToolResult> {
     try {
@@ -143,15 +135,25 @@ export class DarwinPlatformControl implements PlatformControl {
     }
   }
 
-  /** Dev-parity: AppID === display name here since macOS launches by name via `open -a`, unlike Windows' AppUserModelID. Always `isPath: true` — there's no AppsFolder-style activation distinct from openApp() on this platform, so apps/catalog.ts should never route these through launchByAppId(). */
-  async listInstalledApps(): Promise<{ name: string; appId: string; isPath: boolean }[]> {
+  /** Dev-parity: canonicalId/appId === display name here since macOS launches by name via `open -a`. Always `desktop-path`-shaped — there's no AppsFolder-style activation distinct from a plain launch on this platform. */
+  async listInstalledApps(): Promise<InstalledApplication[]> {
     const apps = await listInstalledApps()
-    return apps.map((name) => ({ name, appId: name, isPath: true }))
+    return apps.map((name) => ({
+      canonicalId: mintCanonicalId(name),
+      displayName: name,
+      registrationSource: 'appsfolder' as const,
+      launchKind: 'desktop-path' as const,
+      appId: name
+    }))
   }
 
-  /** Not meaningful on macOS — there's no packaged-app launch distinct from openApp(). */
-  async launchByAppId(): Promise<ToolResult> {
-    return { ok: false, message: "launchByAppId isn't supported on macOS — use openApp instead." }
+  async launchInstalledApp(appEntry: InstalledApplication): Promise<LaunchOutcome> {
+    try {
+      await execFileAsync('open', ['-a', appEntry.appId])
+      return { status: 'accepted', confidence: 'unverified' }
+    } catch (err) {
+      return { status: 'failed', error: (err as Error).message }
+    }
   }
 
   async launchSteamGame(nameOrAppId: string): Promise<ToolResult> {

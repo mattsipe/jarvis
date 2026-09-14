@@ -151,6 +151,11 @@ const jarvisAPI = {
   /** Dev-only — see ipc.ts's 'dev:test-agent-turn'. Not registered in production; rejects there. */
   devTestAgentTurn: (text: string): Promise<unknown> => ipcRenderer.invoke('dev:test-agent-turn', text),
 
+  // --- App Launch Lab (Command Center) — real-PC validation for the app-launch rebuild ---
+  getAppCatalog: (): Promise<unknown[]> => ipcRenderer.invoke('apps:catalog'),
+  resolveApp: (name: string): Promise<unknown> => ipcRenderer.invoke('apps:resolve', name),
+  launchApp: (name: string): Promise<unknown> => ipcRenderer.invoke('apps:launch', name),
+
   // --- Auto-update (GitHub Releases via electron-updater) ---
   checkForUpdates(): void {
     ipcRenderer.send('update:check')

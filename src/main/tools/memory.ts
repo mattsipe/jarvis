@@ -2,18 +2,18 @@ import { z } from 'zod'
 import type { JarvisTool } from './registry'
 import type { MemoryKind } from '../context/memory'
 
-const KIND_ENUM = ['preference', 'alias', 'person', 'project', 'routine', 'device', 'task', 'fact', 'learned'] as const
+const KIND_ENUM = ['preference', 'person', 'project', 'routine', 'device', 'task', 'fact', 'learned'] as const
 
 export const rememberTool: JarvisTool = {
   name: 'remember',
   description:
-    'Save a durable fact, preference, alias, or piece of context about Weston for future conversations and restarts. Use whenever he tells you to remember something, states a lasting preference, or corrects how you should refer to something (e.g. "Outlook" means new Outlook, not classic).',
+    'Save a durable fact, preference, or piece of context about Weston for future conversations and restarts. Use whenever he tells you to remember something or states a lasting preference. For which specific installed app a name like "Outlook" should mean, use set_app_preference instead — never remember (a preference saved here is prose for conversation, not something that gets launched).',
   risk: 'safe',
   input: z.object({
     kind: z
       .enum(KIND_ENUM)
       .describe(
-        '"alias" for "X means Y" app/name mappings, "preference" for how Weston wants something done, "person"/"project"/"routine"/"device" for those, "fact" for anything else durable.'
+        '"preference" for how Weston wants something done, "person"/"project"/"routine"/"device" for those, "fact" for anything else durable.'
       ),
     subject: z.string().describe('What this is about, e.g. "Outlook", "Steam", a person\'s name, a project name.'),
     content: z.string().describe('The actual fact/value/preference to remember.')
@@ -32,7 +32,7 @@ export const rememberTool: JarvisTool = {
 export const recallMemoryTool: JarvisTool = {
   name: 'recall_memory',
   description:
-    'Search what you remember about Weston — preferences, aliases, people, projects, routines, past facts. Use this when he asks "what did I tell you about X" or to check something not already in your always-on memory summary.',
+    'Search what you remember about Weston — preferences, people, projects, routines, past facts. Use this when he asks "what did I tell you about X" or to check something not already in your always-on memory summary.',
   risk: 'safe',
   input: z.object({ query: z.string().describe('What to search for, e.g. "Outlook" or "birthday".') }),
   run: async (input, ctx) => {

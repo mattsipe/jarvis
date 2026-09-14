@@ -1,58 +1,58 @@
 import { z } from 'zod'
 import type { JarvisTool } from './registry'
-import { resolveApp, candidatesForLaunch } from '../apps/resolver'
 import { getCatalog } from '../apps/catalog'
-import { launchWithFallback, makePlatformLauncher } from '../apps/launcher'
+import { rankCandidates, AMBIGUITY_MARGIN } from '../apps/rank'
+import { launchAppByName, type LaunchAppDeps } from '../apps/launchApp'
+import { appPreferences } from '../apps/preferencesStore'
 import { logInfo } from '../logger'
+import type { PlatformControl } from '../platform/types'
+import type { InstalledApplication, LaunchOutcome } from '../apps/types'
+
+/**
+ * Dispatches a resolved catalog entry to the right primitive for its
+ * kind — Steam entries go through the pre-existing, untouched
+ * launchSteamGame path (adapted into the LaunchOutcome shape so the trace
+ * stays uniform); everything else goes through the real native launch +
+ * process-observation path (platform.launchInstalledApp).
+ */
+function createAppLauncher(platform: PlatformControl): (app: InstalledApplication) => Promise<LaunchOutcome> {
+  return async (appEntry) => {
+    if (appEntry.launchKind === 'steam-game') {
+      const result = await platform.launchSteamGame(appEntry.appId)
+      return result.ok ? { status: 'accepted', confidence: 'unverified' } : { status: 'failed', error: result.message }
+    }
+    return platform.launchInstalledApp(appEntry)
+  }
+}
 
 export const openAppTool: JarvisTool = {
   name: 'open_app',
   description:
-    'Open/launch a desktop application by name. Resolves aliases and installed apps (including packaged apps like new Outlook, and Steam games) automatically — if more than one installed app could match equally well, this returns candidates instead of guessing; ask Weston which one, then call remember (kind "alias") with his answer so it resolves cleanly next time.',
+    'Open/launch a desktop application by name. Resolves installed apps (including packaged apps like new Outlook, Office, and Steam games) directly against what Windows itself has registered — if more than one installed app could match equally well, this returns real candidates (with their exact canonicalId) instead of guessing; ask Weston which one, then call set_app_preference with the candidate\'s canonicalId so it resolves cleanly next time.',
   risk: 'moderate',
   input: z.object({ name: z.string().describe('The application name, e.g. "Safari", "Steam", or "Outlook".') }),
   run: async (input, ctx) => {
-    const resolution = resolveApp(input.name)
-    // No catalog match at all (catalog empty/stale, or a name the catalog
-    // genuinely doesn't have) — fall back to the adapter's own
-    // best-effort direct launch rather than failing outright.
-    if (!resolution) return ctx.platform.openApp(input.name)
-    if ('ambiguous' in resolution) {
-      return {
-        ok: false,
-        message: `More than one app matches "${input.name}": ${resolution.candidates.map((c) => c.displayName).join(', ')}. Ask which one, then remember the answer.`,
-        data: { ambiguous: true, candidates: resolution.candidates }
-      }
+    const deps: LaunchAppDeps = {
+      getCatalog: () => getCatalog(),
+      getPreference: (query) => appPreferences.get(query),
+      launch: createAppLauncher(ctx.platform)
     }
+    const { ok, message, trace, ambiguousCandidates } = await launchAppByName(input.name, deps)
 
-    const candidates = candidatesForLaunch(resolution.entry)
-    const { result, attempts, winningCandidate, usedFallback } = await launchWithFallback(candidates, makePlatformLauncher(ctx.platform))
+    // Concise in Recent Actions (`message`, unchanged); the full
+    // request → candidates → activation → observation trail always goes
+    // to the log and rides along in diagnostics for the App Launch Lab —
+    // see apps/types.ts's LaunchTrace doc comment for why this exists.
+    logInfo('apps:launch', JSON.stringify(trace))
 
-    // Concise in Recent Actions (result.message, untouched); the full
-    // requested-name → candidates → attempts → winner trail only ever
-    // goes to the log — see windows.ts's class doc comment bug #4.
-    logInfo(
-      'apps:launch',
-      `"${input.name}" candidates=[${candidates.map((c) => `${c.displayName}(${c.kind})`).join(', ')}] ` +
-        `attempts=[${attempts.map((a) => `${a.displayName}:${a.ok ? 'ok' : 'fail'}`).join(', ')}] ` +
-        `winner=${winningCandidate?.displayName ?? 'none'}`
-    )
-
-    // A fallback candidate is what actually worked, or the top-scored
-    // candidate itself only matched because of a genuine ambiguity (not
-    // the case here — this only runs post-disambiguation) — remember it
-    // so the next launch for this exact name goes straight to what's
-    // confirmed to work, same mechanism as "remember" (kind: "alias").
-    if (usedFallback && winningCandidate) {
-      ctx.context.memory.upsert({
-        kind: 'alias',
-        subject: input.name,
-        content: winningCandidate.appId ?? winningCandidate.launchTarget,
-        source: 'explicit'
-      })
+    return {
+      ok,
+      message,
+      data: ambiguousCandidates
+        ? { ambiguous: true, candidates: ambiguousCandidates.map((c) => ({ canonicalId: c.canonicalId, displayName: c.displayName })) }
+        : undefined,
+      diagnostics: { launchTrace: trace }
     }
-
-    return { ...result, diagnostics: { ...result.diagnostics, launchAttempts: attempts } }
   }
 }
 
@@ -100,15 +100,19 @@ export const launchSteamGameTool: JarvisTool = {
   risk: 'moderate',
   input: z.object({ nameOrAppId: z.string().describe('The game name (preferred) or its Steam app ID.') }),
   run: async (input, ctx) => {
-    const resolution = resolveApp(input.nameOrAppId)
-    if (resolution && !('ambiguous' in resolution) && resolution.entry.kind === 'steam-game') {
-      return ctx.platform.launchSteamGame(resolution.entry.appId ?? input.nameOrAppId)
+    const ranked = rankCandidates(input.nameOrAppId, getCatalog(), null)
+    const top = ranked[0]
+    if (top && top.app.launchKind === 'steam-game' && (ranked.length === 1 || top.score - ranked[1].score >= AMBIGUITY_MARGIN)) {
+      return ctx.platform.launchSteamGame(top.app.appId)
     }
-    if (resolution && 'ambiguous' in resolution) {
+    if (ranked.length > 1 && top && top.score - ranked[1].score < AMBIGUITY_MARGIN) {
       return {
         ok: false,
-        message: `More than one match for "${input.nameOrAppId}": ${resolution.candidates.map((c) => c.displayName).join(', ')}.`,
-        data: { ambiguous: true, candidates: resolution.candidates }
+        message: `More than one match for "${input.nameOrAppId}": ${ranked
+          .slice(0, 4)
+          .map((r) => r.app.displayName)
+          .join(', ')}.`,
+        data: { ambiguous: true, candidates: ranked.slice(0, 4).map((r) => r.app) }
       }
     }
     return ctx.platform.launchSteamGame(input.nameOrAppId)
