@@ -2,6 +2,7 @@ import { createSttProvider, type SttProvider } from './stt'
 import { createTtsProvider, ElevenLabsTts } from './tts'
 import { runAgentTurn, type ToolCallInfo } from '../agent/loop'
 import { matchLocalCommand, matchEndPhrase, type LocalCommandMatch } from '../agent/localCommands'
+import { operateContext } from '../operate/context'
 import { broadcast } from '../window'
 import { TurnTimer } from './telemetry'
 import { usageTracker, budgetManager } from '../usage'
@@ -166,6 +167,9 @@ export class VoiceSession {
     this.activeTts?.close()
     this.activeTts = null
     contextManager.setVoiceSessionActive(false)
+    // A new conversation should never inherit a stale "click that"/"turn
+    // it back off" — see operate/context.ts's class doc comment.
+    operateContext.reset()
     this.send('voice:session-ended', null)
     // Fire-and-forget, once per session, never blocking the actual
     // teardown above — see context/autolearn.ts for the guardrails.

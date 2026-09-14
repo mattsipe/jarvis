@@ -65,6 +65,9 @@ internal static class NativeMethods
 /// </summary>
 internal static class WindowInfo
 {
+    /// <summary>Public entry point for Uia/UiaInspect.cs's window summaries — same shape as the rest of this class's output, without exposing the private Describe() implementation. */
+    internal static JsonObject DescribePublic(nint hwnd) => Describe(hwnd);
+
     private static JsonObject Describe(nint hwnd)
     {
         var length = NativeMethods.GetWindowTextLength(hwnd);

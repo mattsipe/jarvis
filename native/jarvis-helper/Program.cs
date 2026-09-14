@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using JarvisHelper.Uia;
 
 namespace JarvisHelper;
 
@@ -74,6 +75,23 @@ public static class Program
             RequireBool(p, "isPath"),
             OptionalString(p, "arguments"),
             (int)(p?["observeTimeoutMs"]?.GetValue<long>() ?? 8000)),
+
+        // Operate: semantic UI Automation control — see Uia/*.cs. Every
+        // method here takes an optional `excludePids` (JARVIS's own
+        // Electron process, so "active window" resolution never targets
+        // JARVIS itself) and returns compact, typed JSON, never a raw
+        // accessibility tree.
+        "uiInspect" => UiaInspect.Inspect(p),
+        "uiAct" => UiaActions.Act(p),
+        "uiWait" => UiaWait.Wait(p),
+        "uiFingerprint" => Fingerprint.Get(UiaInspect.ParseExcludePids(p)),
+        "inputKeys" => InputRpc.SendKeys(RequireString(p, "keys")),
+        "inputText" => InputRpc.SendText(RequireString(p, "text")),
+        "inputPointer" => InputRpc.Pointer(
+            (int)RequireLong(p, "x"), (int)RequireLong(p, "y"),
+            RequireString(p, "action"), OptionalString(p, "button"),
+            (int)(p?["scrollDelta"]?.GetValue<long>() ?? 0)),
+
         _ => throw new InvalidOperationException($"Unknown method: {method}")
     };
 

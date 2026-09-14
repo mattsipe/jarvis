@@ -8,7 +8,8 @@ import { logError } from '../logger'
 import { jarvisHelper } from './helper'
 import { stripCliXml } from './cliXml'
 import { mintCanonicalId, type InstalledApplication, type LaunchOutcome } from '../apps/types'
-import type { PlatformControl, SystemStatusInfo, ToolResult } from './types'
+import { WindowsOperateControl } from './operateWindows'
+import type { OperateControl, PlatformControl, SystemStatusInfo, ToolResult } from './types'
 
 const execFileAsync = promisify(execFile)
 
@@ -84,6 +85,7 @@ class PowerShellError extends Error {
  */
 export class WindowsPlatformControl implements PlatformControl {
   readonly name = 'win32' as const
+  readonly operate: OperateControl = new WindowsOperateControl()
 
   private static readonly POWERSHELL_PATH = join(
     process.env.SystemRoot || 'C:\\Windows',

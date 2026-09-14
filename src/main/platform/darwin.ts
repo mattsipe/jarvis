@@ -44,6 +44,8 @@ async function listInstalledApps(): Promise<string[]> {
  */
 export class DarwinPlatformControl implements PlatformControl {
   readonly name = 'darwin' as const
+  /** No UIA equivalent on macOS in this pass — see PlatformControl.operate's doc comment; tools/index.ts skips registering the Operate tools entirely when this is null. */
+  readonly operate = null
 
   async closeApp(name: string): Promise<ToolResult> {
     try {

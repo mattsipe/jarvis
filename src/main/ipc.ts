@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { is } from '@electron-toolkit/utils'
-import { setInteractive, toggleCommandCenter, showCommandCenter, showAmbient, broadcast } from './window'
+import { setInteractive, toggleCommandCenter, showCommandCenter, showAmbient, broadcast, highlightElement } from './window'
+import { jarvisHelper } from './platform/helper'
 import { toggleSession, isSessionActive, endSession, getCurrentSession } from './voice/sessionManager'
 import { runAgentTurn } from './agent/loop'
 import { resolveConfirmation, requestConfirmation } from './tools/confirmation'
@@ -200,6 +201,27 @@ export function registerIpcHandlers(): void {
     resolveAppByName(name, { getCatalog: () => getCatalog(), getPreference: (q) => appPreferences.get(q) })
   )
   ipcMain.handle('apps:launch', (_event, name: string) => runToolStandalone('open_app', { name }))
+
+  // Operate Lab (Command Center) — real-PC validation for semantic UI
+  // Automation control, self-contained rather than requiring PowerShell.
+  // 'operate:windows' lists real windows to target (JARVIS's own excluded);
+  // 'operate:inspect'/'operate:act' run the exact same ui_inspect/ui_act
+  // tools a voice call would, through runToolStandalone (so Recent Actions
+  // shows every Lab action too, with its full trace); 'operate:highlight'
+  // draws a transient rectangle over one element for visual confirmation.
+  ipcMain.handle('operate:windows', async () => {
+    try {
+      const { windows } = await jarvisHelper.listWindows()
+      return windows.filter((w) => w.processId !== process.pid)
+    } catch {
+      return []
+    }
+  })
+  ipcMain.handle('operate:inspect', (_event, params: Record<string, unknown>) => runToolStandalone('ui_inspect', params))
+  ipcMain.handle('operate:act', (_event, params: Record<string, unknown>) => runToolStandalone('ui_act', params))
+  ipcMain.handle('operate:highlight', (_event, rect: { x: number; y: number; width: number; height: number }) => {
+    highlightElement(rect)
+  })
 
   // Dev-only: lets automated/manual testing trigger the exact same code path
   // as the real hotkey, without needing OS Accessibility permission to

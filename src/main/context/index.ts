@@ -5,6 +5,7 @@ import { jarvisHelper } from '../platform/helper'
 import { loadPersistentContext, savePersistentContext } from './store'
 import { readLocalHomeLocation, writeLocalHomeLocation } from './local'
 import { memoryStore } from './memory'
+import { operateContext } from '../operate/context'
 import type { LiveContext, LocalHomeLocation, LocationResolution, PersistentContext } from './types'
 
 export type { PersistentContext, LiveContext, LocationResolution } from './types'
@@ -124,7 +125,8 @@ export class ContextManager {
       `Weston's general location: ${general.label}.`,
       live.session.voiceSessionActive ? 'Talking with Weston now via voice.' : '',
       activeWindow?.title ? `Active window: "${activeWindow.title}" (${activeWindow.processName}).` : '',
-      activeWindow ? `Cursor at (${activeWindow.cursor.x}, ${activeWindow.cursor.y}).` : ''
+      activeWindow ? `Cursor at (${activeWindow.cursor.x}, ${activeWindow.cursor.y}).` : '',
+      operateContext.summary()
     ]
       .filter(Boolean)
       .join(' ')

@@ -78,6 +78,10 @@ describe('usage/budgetLogic', () => {
       expect(applyCostPressure('tier2', true, 'vision')).toBe('tier2')
     })
 
+    it('never downgrades an Operate escalation, even under cost pressure — a wrong click/toggle is a correctness problem', () => {
+      expect(applyCostPressure('tier2', true, 'operate')).toBe('tier2')
+    })
+
     it('leaves tier1 as tier1 regardless of pressure or reason', () => {
       expect(applyCostPressure('tier1', true, 'vision')).toBe('tier1')
     })

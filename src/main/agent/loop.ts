@@ -4,11 +4,34 @@ import { MAX_RESPONSE_TOKENS, MODEL_TIERS } from './config'
 import { PERSONA_SYSTEM_PROMPT } from './persona'
 import { pickTier } from './router'
 import { SentenceChunker } from '../voice/sentence'
-import { toolRegistry, type RiskLevel, type ToolResult } from '../tools/registry'
+import { toolRegistry, resolveRisk, type RiskLevel, type ToolResult } from '../tools/registry'
 import { getPlatformControl } from '../platform'
 import { contextManager } from '../context'
 import { usageTracker, budgetManager } from '../usage'
 import { getBudgetConfig } from '../usage/budgetConfig'
+import {
+  createTaskState,
+  recordStep,
+  checkStopReason,
+  buildStepSignature,
+  isRejectedDuplicateAction,
+  TASK_GUARD_DEFAULTS,
+  type TaskState,
+  type StopReason
+} from '../operate/taskGuard'
+
+/** Any tool call among these puts the turn into bounded "task mode" — see operate/taskGuard.ts and the plan's execution-loop design. Everything else keeps the original short MAX_TOOL_ITERATIONS behavior. */
+const OPERATE_TOOL_NAMES = new Set(['ui_inspect', 'ui_act', 'ui_wait', 'keyboard_act', 'pointer_act'])
+
+const STOP_REASON_MESSAGES: Record<Exclude<StopReason, null>, string> = {
+  aborted: "I'm stopping here — cancelled.",
+  steps: "I'm stopping here — this task hit its step limit.",
+  time: "I'm stopping here — this task hit its time limit.",
+  tokens: "I'm stopping here — this task hit its token budget.",
+  budget: "I'm stopping here — I've hit my API budget limit for now.",
+  confirmation_denied: "I'm stopping here since that wasn't confirmed.",
+  no_progress: "I'm stopping here — that doesn't seem to be making progress."
+}
 
 // Caps the SDK's own automatic retry-on-transient-error behavior — see the
 // API-safeguards priority's "cap retries". 2 is the SDK's own default, made
@@ -135,8 +158,27 @@ export async function runAgentTurn(
   let fullText = ''
   let firstTokenSeen = false
   let lastStopReason: string | null = null
+  // Created lazily on the first Operate tool call this turn actually makes
+  // — see OPERATE_TOOL_NAMES. Most turns never touch this at all.
+  let taskState: TaskState | null = null
+  let taskStopReason: StopReason = null
 
-  for (let iteration = 0; iteration <= MAX_TOOL_ITERATIONS; iteration++) {
+  for (let iteration = 0; ; iteration++) {
+    if (taskStopReason) break
+    if (!taskState && iteration > MAX_TOOL_ITERATIONS) break
+
+    // Task mode re-checks the budget every iteration, not just once at
+    // turn start — a long-running Operate task shouldn't be able to run
+    // past a hard limit that got crossed mid-task. Every other kind of
+    // turn is still gated once, at the top of runAgentTurn.
+    if (taskState) {
+      const midTaskGate = budgetManager.checkAnthropicCall({ essential: true })
+      if (!midTaskGate.allowed) {
+        taskStopReason = 'budget'
+        break
+      }
+    }
+
     const stream = getClient().messages.stream(
       {
         model: tierConfig.model,
@@ -188,7 +230,7 @@ export async function runAgentTurn(
     }
 
     lastStopReason = final.stop_reason
-    if (final.stop_reason !== 'tool_use' || iteration === MAX_TOOL_ITERATIONS || turnBudgetExceeded) break
+    if (final.stop_reason !== 'tool_use' || turnBudgetExceeded) break
 
     const toolUses = final.content.filter(
       (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use'
@@ -199,10 +241,36 @@ export async function runAgentTurn(
 
     const resultBlocks: Anthropic.ToolResultBlockParam[] = []
     for (const call of toolUses) {
-      if (signal?.aborted) break
+      if (signal?.aborted) {
+        if (taskState) taskState = { ...taskState, aborted: true }
+        break
+      }
       const tool = toolRegistry.get(call.name)
-      const risk: RiskLevel = tool?.risk ?? 'moderate'
+      const risk: RiskLevel = tool ? resolveRisk(tool, call.input) : 'moderate'
       const info: ToolCallInfo = { id: call.id, name: call.name, input: call.input, risk }
+
+      const isOperateCall = OPERATE_TOOL_NAMES.has(call.name)
+      if (isOperateCall && !taskState) taskState = createTaskState(turnStartedAt)
+
+      // A duplicate, non-idempotent action right after itself (e.g. two
+      // identical `invoke` calls in a row) is rejected before it's even
+      // attempted — idempotent actions (toggle/select/expand/...) are
+      // exempt, since repeating those with the same desired state is
+      // exactly what makes "turn it back off" safe. See taskGuard.ts.
+      if (isOperateCall && taskState) {
+        const targetDesc = typeof call.input === 'object' && call.input && 'target' in call.input ? JSON.stringify((call.input as { target?: unknown }).target) : ''
+        const actionDesc = typeof call.input === 'object' && call.input && 'action' in call.input ? String((call.input as { action?: unknown }).action) : call.name
+        const signature = buildStepSignature(call.name, targetDesc, actionDesc)
+        if (isRejectedDuplicateAction(actionDesc, signature, taskState.recentSignatures)) {
+          const result: ToolResult = { ok: false, message: 'Not repeating that — it was just attempted with no observed change. Re-inspect first if you need to confirm the current state.' }
+          hooks?.onToolStart?.(info)
+          hooks?.onToolResult?.(info, result)
+          resultBlocks.push({ type: 'tool_result', tool_use_id: call.id, content: result.message, is_error: true })
+          taskState = recordStep(taskState, signature, false)
+          continue
+        }
+      }
+
       hooks?.onToolStart?.(info)
 
       let result: ToolResult
@@ -213,8 +281,18 @@ export async function runAgentTurn(
         result = approved
           ? await toolRegistry.execute(call.name, call.input, ctx)
           : { ok: false, message: 'Not confirmed — cancelled.' }
+        // A denied confirmation stops the whole task, not just this one
+        // step — see the plan: no alternate route to the same
+        // consequential action should be tried afterward.
+        if (!approved && taskState) taskState = { ...taskState, confirmationDenied: true }
       } else {
         result = await toolRegistry.execute(call.name, call.input, ctx)
+      }
+
+      if (isOperateCall && taskState) {
+        const targetDesc = typeof call.input === 'object' && call.input && 'target' in call.input ? JSON.stringify((call.input as { target?: unknown }).target) : ''
+        const actionDesc = typeof call.input === 'object' && call.input && 'action' in call.input ? String((call.input as { action?: unknown }).action) : call.name
+        taskState = recordStep(taskState, buildStepSignature(call.name, targetDesc, actionDesc), result.ok)
       }
 
       hooks?.onToolResult?.(info, result)
@@ -245,16 +323,30 @@ export async function runAgentTurn(
     // tokens across iterations. Never touches `history` below, which only
     // ever stores final text, not these message objects.
     pruneOlderScreenshots(messages, messages.length - 1)
+
+    // Once a turn has entered task mode, every one of these stop
+    // conditions is checked before the next model call is even made — see
+    // operate/taskGuard.ts and the plan's execution-loop design.
+    if (taskState) {
+      taskState = { ...taskState, tokensUsed: turnTokensUsed }
+      taskStopReason = checkStopReason(taskState, TASK_GUARD_DEFAULTS, Date.now(), turnBudgetExceeded)
+      if (taskStopReason) break
+    }
   }
 
   const last = chunker.flush()
   if (last) onSentence(last)
 
-  // The loop was cut off mid-tool-use by the turn's own token/time budget
-  // (a runaway multi-step task, not a normal short reply that just
-  // finished) — say so, since otherwise the turn would end in silence with
-  // no text ever generated for this last step.
-  if (turnBudgetExceeded && lastStopReason === 'tool_use') {
+  // The loop was cut off mid-tool-use by an Operate task's own guard
+  // (steps/time/tokens/budget/abort/confirmation-denied/no-progress) — say
+  // so, since otherwise the turn would end in silence with no text ever
+  // generated for this last step. Checked before the generic turn-budget
+  // note below, since a task stop reason is always the more specific one.
+  if (taskStopReason && taskStopReason !== 'aborted' && lastStopReason === 'tool_use') {
+    const note = STOP_REASON_MESSAGES[taskStopReason]
+    fullText += (fullText ? ' ' : '') + note
+    onSentence(note)
+  } else if (turnBudgetExceeded && lastStopReason === 'tool_use') {
     const note = "I'm stopping here — this task hit its time or token budget for one turn."
     fullText += (fullText ? ' ' : '') + note
     onSentence(note)

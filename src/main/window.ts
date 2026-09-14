@@ -250,6 +250,65 @@ export function setTrayStatus(label: string, muted: boolean): void {
   rebuildTray()
 }
 
+let highlightWindow: BrowserWindow | null = null
+let highlightTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * Operate Lab's "highlight an element" — a short-lived, transparent,
+ * click-through, content-protected window drawn exactly over one UIA
+ * element's bounding rectangle, so real-PC validation can visually
+ * confirm a ref actually points at the control it claims to. `rect` is in
+ * physical screen pixels (what the helper reports, now that it's
+ * PerMonitorV2-aware — see app.manifest); `screen.screenToDipRect`
+ * converts to the DIP coordinates Electron's own BrowserWindow API takes.
+ */
+export function highlightElement(rect: { x: number; y: number; width: number; height: number }, durationMs = 1500): void {
+  if (highlightTimer) clearTimeout(highlightTimer)
+  if (highlightWindow && !highlightWindow.isDestroyed()) highlightWindow.destroy()
+
+  let dipRect = rect
+  try {
+    dipRect = screen.screenToDipRect(null, rect)
+  } catch {
+    // Older Electron, or an unsupported host — fall back to treating the
+    // rect as already-DIP (correct at 100% scaling, which is the common
+    // case; a scaled display without this conversion may be slightly off).
+  }
+
+  const win = new BrowserWindow({
+    x: dipRect.x,
+    y: dipRect.y,
+    width: Math.max(1, dipRect.width),
+    height: Math.max(1, dipRect.height),
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    resizable: false,
+    movable: false,
+    focusable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    show: true,
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false }
+  })
+  win.setIgnoreMouseEvents(true)
+  win.setAlwaysOnTop(true, 'screen-saver')
+  win.setContentProtection(true) // never shows up in JARVIS's own look_at_screen captures
+  win.loadURL(
+    'data:text/html,' +
+      encodeURIComponent(
+        '<style>html,body{margin:0;background:transparent}.b{position:absolute;inset:2px;border:3px solid #4fd8ff;border-radius:4px;box-shadow:0 0 12px rgba(79,216,255,0.9)}</style><div class="b"></div>'
+      )
+  )
+  highlightWindow = win
+  highlightTimer = setTimeout(() => {
+    if (!win.isDestroyed()) win.destroy()
+    highlightWindow = null
+    highlightTimer = null
+  }, durationMs)
+}
+
 function rebuildTray(): void {
   if (!tray) return
   tray.setToolTip(`JARVIS — ${trayStatusLabel}`)

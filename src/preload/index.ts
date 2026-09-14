@@ -156,6 +156,13 @@ const jarvisAPI = {
   resolveApp: (name: string): Promise<unknown> => ipcRenderer.invoke('apps:resolve', name),
   launchApp: (name: string): Promise<unknown> => ipcRenderer.invoke('apps:launch', name),
 
+  // --- Operate Lab (Command Center) — real-PC validation for semantic UI Automation control ---
+  operateListWindows: (): Promise<unknown[]> => ipcRenderer.invoke('operate:windows'),
+  operateInspect: (params: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('operate:inspect', params),
+  operateAct: (params: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('operate:act', params),
+  operateHighlight: (rect: { x: number; y: number; width: number; height: number }): Promise<void> =>
+    ipcRenderer.invoke('operate:highlight', rect),
+
   // --- Auto-update (GitHub Releases via electron-updater) ---
   checkForUpdates(): void {
     ipcRenderer.send('update:check')

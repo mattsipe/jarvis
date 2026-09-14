@@ -73,9 +73,9 @@ export function decideGate(input: GateInput): GateResult {
   return { allowed: false, reason: `${input.dailyHardCrossed ? 'Daily' : 'Monthly'} budget limit reached.` }
 }
 
-/** Downgrades an escalated tier to the cheapest tier once the soft limit is crossed — vision calls are exempt (a wrong answer there is a correctness problem, not just a cost one) and left to the caller to keep as tier2. */
-export function applyCostPressure(tier: 'tier1' | 'tier2', costPressure: boolean, reason: 'length' | 'complexity' | 'vision'): 'tier1' | 'tier2' {
+/** Downgrades an escalated tier to the cheapest tier once the soft limit is crossed — vision and Operate calls are exempt (a wrong screen-reading answer or a wrong click/toggle is a correctness problem, not just a cost one) and left to the caller to keep as tier2. */
+export function applyCostPressure(tier: 'tier1' | 'tier2', costPressure: boolean, reason: 'length' | 'complexity' | 'vision' | 'operate'): 'tier1' | 'tier2' {
   if (!costPressure) return tier
-  if (reason === 'vision') return tier
+  if (reason === 'vision' || reason === 'operate') return tier
   return 'tier1'
 }

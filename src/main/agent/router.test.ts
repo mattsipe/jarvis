@@ -25,7 +25,20 @@ describe('agent/router pickTier', () => {
     expect(pickTier('I am seeking a good restaurant nearby')).toBe('tier1')
   })
 
+  it('picks tier2 for Operate phrasing (turn on/off, toggle, fill, type, switch to, fix)', () => {
+    expect(pickTier('turn on Bluetooth')).toBe('tier2')
+    expect(pickTier('turn off Bluetooth')).toBe('tier2')
+    expect(pickTier('toggle dark mode')).toBe('tier2')
+    expect(pickTier('fill this in')).toBe('tier2')
+    expect(pickTier('switch to the second tab')).toBe('tier2')
+    expect(pickTier('see this error? fix it')).toBe('tier2')
+  })
+
   describe('cost pressure', () => {
+    it('keeps an Operate-triggered tier2 even under cost pressure', () => {
+      expect(pickTier('turn on Bluetooth', { costPressure: true })).toBe('tier2')
+    })
+
     it('downgrades a length-triggered tier2 back to tier1 under cost pressure', () => {
       expect(pickTier('a'.repeat(221), { costPressure: true })).toBe('tier1')
     })

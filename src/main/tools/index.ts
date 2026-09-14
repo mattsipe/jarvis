@@ -1,4 +1,4 @@
-import { toolRegistry } from './registry'
+import { toolRegistry, resolveRisk } from './registry'
 import { openAppTool, closeAppTool, findAppTool, focusWindowTool, launchSteamGameTool } from './apps'
 import { setAppPreferenceTool } from './appPreference'
 import { openUrlTool } from './web'
@@ -14,6 +14,7 @@ import {
 } from './system'
 import { rememberTool, recallMemoryTool, updateMemoryTool, forgetMemoryTool } from './memory'
 import { lookAtScreenTool } from './perception'
+import { uiInspectTool, uiActTool, uiWaitTool, keyboardActTool, pointerActTool, openSettingsPageTool } from './operate'
 import { recordToolActivity } from './activity'
 import { getPlatformControl } from '../platform'
 import { contextManager } from '../context'
@@ -48,6 +49,16 @@ export function registerBuiltInTools(): void {
   ]) {
     toolRegistry.register(tool)
   }
+
+  // Operate: only registered when the platform adapter actually has a
+  // UIA-equivalent backing it (Windows) — see PlatformControl.operate's
+  // doc comment. Registering these unconditionally on macOS would offer
+  // Claude tools that always fail, and cost real tokens doing it.
+  if (getPlatformControl().operate) {
+    for (const tool of [uiInspectTool, uiActTool, uiWaitTool, keyboardActTool, pointerActTool, openSettingsPageTool]) {
+      toolRegistry.register(tool)
+    }
+  }
 }
 
 /**
@@ -62,7 +73,7 @@ export function registerBuiltInTools(): void {
 export async function runToolStandalone(name: string, input: unknown = {}): Promise<ToolResult> {
   const ctx = { platform: getPlatformControl(), context: contextManager }
   const tool = toolRegistry.get(name)
-  const risk = tool?.risk ?? 'safe'
+  const risk = tool ? resolveRisk(tool, input) : 'safe'
   const id = `standalone-${name}-${Date.now()}`
   const timestamp = new Date().toISOString()
 

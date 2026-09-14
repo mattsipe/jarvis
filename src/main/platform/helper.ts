@@ -234,6 +234,42 @@ class HelperClient {
     )
   }
 
+  /**
+   * Semantic UI Automation (Operate) — see Uia/*.cs. `uiInspect` returns
+   * either a list-shaped result (`{elements,window,truncated}`) or a
+   * single element's detail (when `ref` is given) — both raw JSON here,
+   * shaped properly one layer up in platform/windows.ts's OperateControl
+   * implementation.
+   */
+  uiInspect(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.call('uiInspect', params, 6000)
+  }
+
+  uiAct(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.call('uiAct', params, 12000)
+  }
+
+  uiWait(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const timeoutMs = typeof params.timeoutMs === 'number' ? params.timeoutMs : 5000
+    return this.call('uiWait', params, timeoutMs + 3000)
+  }
+
+  uiFingerprint(excludePids: number[]): Promise<Record<string, unknown>> {
+    return this.call('uiFingerprint', { excludePids })
+  }
+
+  inputKeys(keys: string): Promise<{ sent: boolean }> {
+    return this.call('inputKeys', { keys })
+  }
+
+  inputText(text: string): Promise<{ sent: boolean }> {
+    return this.call('inputText', { text })
+  }
+
+  inputPointer(params: { x: number; y: number; action: string; button?: string; scrollDelta?: number }): Promise<{ sent: boolean }> {
+    return this.call('inputPointer', params)
+  }
+
   /** Called once at app shutdown — best-effort, never blocks quitting. */
   stop(): void {
     if (this.restartTimer) clearTimeout(this.restartTimer)

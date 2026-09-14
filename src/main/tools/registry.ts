@@ -28,8 +28,20 @@ export interface JarvisTool<S extends z.ZodTypeAny = z.ZodTypeAny> {
   name: string
   description: string
   input: S
-  risk: RiskLevel
+  /**
+   * Most tools declare a fixed level. Operate's tools (tools/operate.ts)
+   * instead pass a function, since the very same tool (ui_act, say) is
+   * routine for a Bluetooth toggle and consequential for "Send" — see
+   * operate/risk.ts's classifyRisk(). Always resolve this through
+   * resolveRisk() below, never read `.risk` directly.
+   */
+  risk: RiskLevel | ((input: z.infer<S>) => RiskLevel)
   run(input: z.infer<S>, ctx: ToolContext): Promise<ToolResult>
+}
+
+/** The one place a tool's risk is actually decided for a given call — see JarvisTool.risk's doc comment. */
+export function resolveRisk(tool: JarvisTool, input: unknown): RiskLevel {
+  return typeof tool.risk === 'function' ? tool.risk(input) : tool.risk
 }
 
 class ToolRegistry {

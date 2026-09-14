@@ -1,4 +1,5 @@
 import type { InstalledApplication, LaunchOutcome, LaunchTrace } from '../apps/types'
+import type { ActionResult, ElementDetail, InspectResult, OperateTarget, WaitResult, WindowSummary } from '../operate/types'
 
 export interface ToolDiagnostics {
   /** Which platform adapter actually ran this — filled in by ToolRegistry.execute, not the adapter itself. */
@@ -79,6 +80,51 @@ export interface PlatformControl {
    * ever produces `{status:'failed'}`.
    */
   launchInstalledApp(app: InstalledApplication): Promise<LaunchOutcome>
+  /**
+   * Semantic UI Automation control (Operate) — `null` on a platform with
+   * no UIA equivalent (macOS), which is also how tools/index.ts decides
+   * whether to register the Operate tools at all, so Claude never even
+   * sees them offered on a platform that can't back them (and never pays
+   * their token cost either).
+   */
+  readonly operate: OperateControl | null
+}
+
+/**
+ * The thin, typed surface tools/operate.ts calls through — see
+ * operate/types.ts for the shared result shapes and the plan's "typed
+ * tool contracts" section for why this stays a small, fixed set of
+ * methods rather than exposing raw UIA. Windows implements this via
+ * jarvis-helper.exe's Uia/*.cs; there is no macOS implementation.
+ */
+export interface OperateControl {
+  inspect(params: {
+    window?: string
+    query?: string
+    ref?: string
+    at?: { x: number; y: number }
+    maxElements?: number
+  }): Promise<InspectResult | ElementDetail>
+  act(params: {
+    target: OperateTarget
+    action: 'invoke' | 'toggle' | 'set_value' | 'select' | 'expand' | 'collapse' | 'focus' | 'scroll'
+    desiredState?: 'on' | 'off'
+    value?: string
+    option?: string
+    direction?: 'up' | 'down' | 'into_view'
+    waitMs?: number
+  }): Promise<ActionResult>
+  wait(params: {
+    condition: 'appears' | 'disappears' | 'state' | 'window_title'
+    target?: OperateTarget
+    state?: string
+    titleContains?: string
+    timeoutMs: number
+  }): Promise<WaitResult>
+  fingerprint(): Promise<WindowSummary>
+  sendKeys(keys: string): Promise<void>
+  sendText(text: string): Promise<void>
+  pointer(params: { x: number; y: number; action: 'click' | 'double_click' | 'right_click' | 'scroll'; button?: 'left' | 'right'; scrollDelta?: number }): Promise<void>
 }
 
 export class UnsupportedFeatureError extends Error {}

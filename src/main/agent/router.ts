@@ -21,6 +21,14 @@ const COMPLEXITY_KEYWORDS = [
 const VISION_KEYWORDS = ['this', 'that', 'look', 'see', 'screen', 'error', 'click', 'cursor', 'mouse']
 
 /**
+ * Operate phrasing needs the same real reasoning as vision (deciding
+ * which UIA element a name refers to, sequencing multi-step control) —
+ * routed to tier2 and, like vision, never downgraded under cost pressure:
+ * a wrong click/toggle is a correctness problem, not just a cost one.
+ */
+const OPERATE_KEYWORDS = ['turn on', 'turn off', 'toggle', 'enable', 'disable', 'click', 'select', 'fill', 'type', 'switch to', 'fix']
+
+/**
  * Cheap heuristic for tier1 (Haiku, fast/cheap) vs tier2 (Opus, high
  * effort). Can graduate to a one-line Haiku classification later if this
  * proves too blunt in practice.
@@ -38,6 +46,9 @@ export function pickTier(text: string, opts?: { costPressure?: boolean }): Model
   const costPressure = opts?.costPressure ?? false
   if (VISION_KEYWORDS.some((kw) => new RegExp(`\\b${kw}\\b`).test(t))) {
     return applyCostPressure('tier2', costPressure, 'vision')
+  }
+  if (OPERATE_KEYWORDS.some((kw) => new RegExp(`\\b${kw}\\b`).test(t))) {
+    return applyCostPressure('tier2', costPressure, 'operate')
   }
   if (t.length > 220) return applyCostPressure('tier2', costPressure, 'length')
   if (COMPLEXITY_KEYWORDS.some((kw) => t.includes(kw))) return applyCostPressure('tier2', costPressure, 'complexity')

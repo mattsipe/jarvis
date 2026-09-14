@@ -22,6 +22,30 @@
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!-- PerMonitorV2 DPI awareness (app.manifest) — Operate's UIA bounding
+         rectangles and SendInput coordinates must be physical pixels, not
+         the virtualized ones an unaware process gets handed. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- FlaUI.Core's net8.0-windows7.0 build declares a hard FrameworkReference
+         on Microsoft.WindowsDesktop.App.WindowsForms (for System.Drawing
+         rect/point types) — this must be declared explicitly here too, or
+         the SDK can't resolve the reference pack needed to even compile
+         against it, cross-platform or not. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- Lets this project's Windows-only reference packs (WindowsForms
+         above) resolve when compiling from a non-Windows host, e.g. this
+         dev machine cross-publishing to win-x64 as a build-only sanity
+         check — CI (windows-latest) doesn't need this, but it doesn't
+         hurt there either. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- UIA3 (Windows' native COM automation API) via FlaUI instead of
+         hand-written vtables — see the plan's Operate design for why
+         (AudioHelper's off-by-one vtable bug is exactly the failure mode
+         this avoids for a much larger, more complex COM surface). -->
+    <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
+  </ItemGroup>
 
 </Project>
