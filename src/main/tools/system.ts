@@ -65,6 +65,21 @@ export const screenshotTool: JarvisTool = {
   run: (_input, ctx) => ctx.platform.screenshot()
 }
 
+/**
+ * A real tool that does nothing — lets a purely-local reply (e.g. "what
+ * time is it") flow through voice/session.ts's existing respondLocally
+ * path (activity feed, TTS wiring, turn bookkeeping) without inventing a
+ * second code path just for zero-token replies. See
+ * agent/localCommands.ts's time/date matches.
+ */
+export const noopTool: JarvisTool = {
+  name: 'noop',
+  description: 'No-op — used only for purely local replies that need no real action.',
+  risk: 'safe',
+  input: z.object({}),
+  run: async () => ({ ok: true, message: 'ok' })
+}
+
 export const selfTestTool: JarvisTool = {
   name: 'self_test',
   description:

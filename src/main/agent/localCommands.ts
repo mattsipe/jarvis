@@ -1,9 +1,12 @@
 import { resolveApp } from '../apps/resolver'
+import type { SettingsPageKey } from '../operate/settingsPages'
 
 export interface LocalCommandMatch {
   toolName: string
   toolInput: Record<string, unknown>
   spoken: string
+  /** For usage/turnLedger.ts diagnostics only — never read by dispatch logic. Defaults to 'local-command' when omitted. */
+  source?: 'local-command' | 'instant' | 'settings-page' | 'operate-followup'
 }
 
 function normalize(text: string): string {
@@ -27,7 +30,38 @@ function normalize(text: string): string {
  * costs one ordinary Claude turn; a false positive would silently do the
  * wrong thing, so patterns are kept tight rather than clever.
  */
-export function matchLocalCommand(rawText: string): LocalCommandMatch | null {
+/** A few common spoken names for each settings page — kept intentionally small; anything not listed here just falls through to Claude's own open_settings_page tool call. */
+const SETTINGS_PAGE_ALIASES: Record<string, SettingsPageKey> = {
+  bluetooth: 'bluetooth',
+  wifi: 'wifi',
+  'wi-fi': 'wifi',
+  'wi fi': 'wifi',
+  network: 'network',
+  display: 'display',
+  sound: 'sound',
+  audio: 'sound',
+  notifications: 'notifications',
+  apps: 'apps',
+  'default apps': 'default_apps',
+  'windows update': 'windows_update',
+  update: 'windows_update',
+  personalization: 'personalization',
+  power: 'power',
+  storage: 'storage',
+  mouse: 'mouse',
+  keyboard: 'keyboard',
+  privacy: 'privacy'
+}
+
+function formatTime(now: Date): string {
+  return now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
+function formatDate(now: Date): string {
+  return now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })
+}
+
+export function matchLocalCommand(rawText: string, now: Date = new Date()): LocalCommandMatch | null {
   const text = normalize(rawText)
   if (!text) return null
 
@@ -59,6 +93,22 @@ export function matchLocalCommand(rawText: string): LocalCommandMatch | null {
     return { toolName: 'self_test', toolInput: {}, spoken: 'Running the self-test.' }
   }
 
+  if (/^what(?:'s| is)( the)? time( is it)?$/.test(text) || text === 'what time is it') {
+    return { toolName: 'noop', toolInput: {}, spoken: `It's ${formatTime(now)}.`, source: 'instant' }
+  }
+  if (/^what(?:'s| is)( the)?( today'?s)? date$|^what day is it$/.test(text)) {
+    return { toolName: 'noop', toolInput: {}, spoken: `It's ${formatDate(now)}.`, source: 'instant' }
+  }
+
+  const settingsMatch = text.match(/^open (.+?) settings$/)
+  if (settingsMatch) {
+    const page = SETTINGS_PAGE_ALIASES[settingsMatch[1].trim()]
+    if (page) {
+      return { toolName: 'open_settings_page', toolInput: { page }, spoken: `Opening ${settingsMatch[1].trim()} settings.`, source: 'settings-page' }
+    }
+    return null // an unrecognized settings page name — let Claude's own open_settings_page tool call (or a normal answer) handle it
+  }
+
   const openMatch = text.match(/^(?:open|launch|start)\s+(.+)$/)
   if (openMatch) {
     const name = openMatch[1].trim()
@@ -87,4 +137,18 @@ export function matchEndPhrase(rawText: string): boolean {
   const text = normalize(rawText)
   if (!text) return false
   return /^(?:ok(?:ay)?[, ]+)?(?:jarvis[, ]+)?(?:that'?s all|go back to sleep|end conversation)$/.test(text)
+}
+
+/**
+ * "Stop" / "cancel" / "never mind" — aborts whatever the current turn is
+ * doing (a multi-step Operate task included), matched before anything
+ * else so it costs nothing and works even mid-task. See
+ * voice/session.ts's use of this alongside the existing barge-in/hotkey
+ * abort paths — this is an additional phrase-based trigger, not a
+ * replacement for either.
+ */
+export function matchStopPhrase(rawText: string): boolean {
+  const text = normalize(rawText)
+  if (!text) return false
+  return /^(?:ok(?:ay)?[, ]+)?(?:jarvis[, ]+)?(?:stop|cancel|cancel that|never ?mind|abort|stop that|stop it)$/.test(text)
 }

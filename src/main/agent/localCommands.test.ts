@@ -8,7 +8,7 @@ import { describe, it, expect, vi } from 'vitest'
 const { resolveAppMock } = vi.hoisted(() => ({ resolveAppMock: vi.fn() }))
 vi.mock('../apps/resolver', () => ({ resolveApp: resolveAppMock }))
 
-const { matchLocalCommand, matchEndPhrase } = await import('./localCommands')
+const { matchLocalCommand, matchEndPhrase, matchStopPhrase } = await import('./localCommands')
 
 describe('agent/localCommands matchLocalCommand', () => {
   it('matches mute/unmute in a few common phrasings', () => {
@@ -57,6 +57,52 @@ describe('agent/localCommands matchLocalCommand', () => {
   it('returns null for ordinary conversational text', () => {
     expect(matchLocalCommand('what is the weather like today')).toBeNull()
     expect(matchLocalCommand('')).toBeNull()
+  })
+
+  it('answers the time locally with no tool side effect', () => {
+    const now = new Date('2026-01-01T15:30:00')
+    const match = matchLocalCommand('what time is it', now)
+    expect(match?.toolName).toBe('noop')
+    expect(match?.source).toBe('instant')
+    expect(match?.spoken).toContain('3:30')
+  })
+
+  it('answers the date locally', () => {
+    const now = new Date('2026-01-01T12:00:00')
+    const match = matchLocalCommand('what is the date', now)
+    expect(match?.toolName).toBe('noop')
+    expect(match?.spoken).toContain('January')
+  })
+
+  it('matches "open <page> settings" for a known page', () => {
+    const match = matchLocalCommand('open bluetooth settings')
+    expect(match).toEqual({ toolName: 'open_settings_page', toolInput: { page: 'bluetooth' }, spoken: 'Opening bluetooth settings.', source: 'settings-page' })
+  })
+
+  it('matches wi-fi settings via its alias', () => {
+    expect(matchLocalCommand('open wi-fi settings')?.toolInput).toEqual({ page: 'wifi' })
+  })
+
+  it('falls through for an unrecognized settings page name', () => {
+    expect(matchLocalCommand('open frobnicator settings')).toBeNull()
+  })
+})
+
+describe('agent/localCommands matchStopPhrase', () => {
+  it('matches stop/cancel/never mind', () => {
+    expect(matchStopPhrase('stop')).toBe(true)
+    expect(matchStopPhrase('cancel')).toBe(true)
+    expect(matchStopPhrase('never mind')).toBe(true)
+    expect(matchStopPhrase('Jarvis, stop')).toBe(true)
+  })
+
+  it('does not match a sentence merely containing "stop" as a fragment', () => {
+    expect(matchStopPhrase('please stop putting things off')).toBe(false)
+  })
+
+  it('returns false for ordinary text and empty input', () => {
+    expect(matchStopPhrase('what time is it')).toBe(false)
+    expect(matchStopPhrase('')).toBe(false)
   })
 })
 

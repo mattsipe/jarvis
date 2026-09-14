@@ -10,7 +10,8 @@ import {
   unmuteTool,
   systemStatusTool,
   screenshotTool,
-  selfTestTool
+  selfTestTool,
+  noopTool
 } from './system'
 import { rememberTool, recallMemoryTool, updateMemoryTool, forgetMemoryTool } from './memory'
 import { lookAtScreenTool } from './perception'
@@ -41,6 +42,7 @@ export function registerBuiltInTools(): void {
     systemStatusTool,
     screenshotTool,
     selfTestTool,
+    noopTool,
     rememberTool,
     recallMemoryTool,
     updateMemoryTool,

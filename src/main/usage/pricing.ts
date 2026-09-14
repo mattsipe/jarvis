@@ -25,6 +25,7 @@ export interface PricingConfig {
 export const DEFAULT_PRICING: PricingConfig = {
   anthropic: {
     'claude-haiku-4-5': { inputPerMTok: 1, outputPerMTok: 5, cacheWritePerMTok: 1.25, cacheReadPerMTok: 0.1 },
+    'claude-sonnet-5': { inputPerMTok: 3, outputPerMTok: 15, cacheWritePerMTok: 3.75, cacheReadPerMTok: 0.3 },
     'claude-opus-5': { inputPerMTok: 5, outputPerMTok: 25, cacheWritePerMTok: 6.25, cacheReadPerMTok: 0.5 }
   },
   deepgramPerMinuteUsd: 0.0043,

@@ -10,9 +10,17 @@ export interface BudgetConfig {
   dailyHardUsd: number | null
   monthlySoftUsd: number | null
   monthlyHardUsd: number | null
-  /** Cross-cutting safety net for one agent turn's tool loop — see agent/loop.ts. Not a per-provider $ limit, just bounds on one runaway turn. */
+  /** Cross-cutting safety net for one agent turn's tool loop — see agent/loopLegacy.ts. Not a per-provider $ limit, just bounds on one runaway turn. Only read by the legacy engine; the optimized engine uses its own cost-based ceilings (loopOptimized.ts's TURN_COST_CEILING_USD/TASK_COST_CEILING_USD) instead — see the Cost + Context Optimization plan for why the token-based version was unreliable in task mode. */
   maxTurnTokens: number
   maxTurnWallMs: number
+  /**
+   * Validation-only A/B toggle for the Cost + Context Optimization
+   * milestone — 'optimized' routes through agent/loopOptimized.ts (local
+   * fast-path, Haiku/Sonnet/Opus routing, bounded conversation, pruning);
+   * 'legacy' routes through the frozen agent/loopLegacy.ts exactly as
+   * shipped in v0.10.0-test.1. See agent/loop.ts's dispatcher.
+   */
+  routingPolicy: 'optimized' | 'legacy'
 }
 
 /**
@@ -29,7 +37,8 @@ function defaultConfig(): BudgetConfig {
     monthlySoftUsd: envNumber('JARVIS_BUDGET_MONTHLY_SOFT_USD', 40),
     monthlyHardUsd: envNumber('JARVIS_BUDGET_MONTHLY_HARD_USD', 100),
     maxTurnTokens: envNumber('JARVIS_MAX_TURN_TOKENS', 40000) ?? 40000,
-    maxTurnWallMs: (envNumber('JARVIS_MAX_TURN_SECONDS', 180) ?? 180) * 1000
+    maxTurnWallMs: (envNumber('JARVIS_MAX_TURN_SECONDS', 180) ?? 180) * 1000,
+    routingPolicy: process.env.JARVIS_ROUTING_POLICY === 'legacy' ? 'legacy' : 'optimized'
   }
 }
 

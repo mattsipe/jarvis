@@ -1,5 +1,14 @@
-import type { ModelTier } from './config'
 import { applyCostPressure } from '../usage/budgetLogic'
+
+/**
+ * FROZEN — this is the exact v0.10.0-test.1 tier picker, used only by the
+ * legacy engine (agent/loopLegacy.ts) as the "legacy" side of the Command
+ * Center's routing-policy A/B toggle. Its own local tier type on purpose:
+ * agent/config.ts's `ModelTier` now describes the optimized engine's
+ * fast/standard/deep tiers, unrelated to this file. See
+ * agent/turnRouter.ts for the optimized replacement.
+ */
+type LegacyModelTier = 'tier1' | 'tier2'
 
 const COMPLEXITY_KEYWORDS = [
   'and then',
@@ -41,7 +50,7 @@ const OPERATE_KEYWORDS = ['turn on', 'turn off', 'toggle', 'enable', 'disable', 
  * reasoning, so a wrong answer there is a correctness problem, not just a
  * cost one — see the plan's screen-perception priority.
  */
-export function pickTier(text: string, opts?: { costPressure?: boolean }): ModelTier {
+export function pickTier(text: string, opts?: { costPressure?: boolean }): LegacyModelTier {
   const t = text.trim().toLowerCase()
   const costPressure = opts?.costPressure ?? false
   if (VISION_KEYWORDS.some((kw) => new RegExp(`\\b${kw}\\b`).test(t))) {

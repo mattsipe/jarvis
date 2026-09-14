@@ -36,6 +36,14 @@ export interface JarvisTool<S extends z.ZodTypeAny = z.ZodTypeAny> {
    * resolveRisk() below, never read `.risk` directly.
    */
   risk: RiskLevel | ((input: z.infer<S>) => RiskLevel)
+  /**
+   * Toolset membership for the optimized engine's cost-aware routing (see
+   * agent/promptBuilder.ts's selectToolset) — 'operate' for the six
+   * UIA/keyboard/pointer tools, defaulting to 'core' for everything else.
+   * Purely additive metadata: never read by the legacy engine or by
+   * ToolRegistry.execute, so it changes no tool's behavior.
+   */
+  group?: 'core' | 'operate'
   run(input: z.infer<S>, ctx: ToolContext): Promise<ToolResult>
 }
 
@@ -59,9 +67,16 @@ class ToolRegistry {
     return [...this.tools.values()]
   }
 
-  /** Converts every registered tool into Claude's tool-use format. */
-  toAnthropicTools(): Anthropic.Tool[] {
-    return this.list().map((tool) => {
+  /**
+   * Converts registered tools into Claude's tool-use format. `toolset`
+   * (optimized engine only — see agent/promptBuilder.ts) restricts this
+   * to non-Operate tools when 'core'; omitted or 'core+operate' returns
+   * everything, matching the legacy engine's unfiltered behavior exactly.
+   */
+  toAnthropicTools(toolset: 'core' | 'core+operate' = 'core+operate'): Anthropic.Tool[] {
+    return this.list()
+      .filter((tool) => toolset === 'core+operate' || (tool.group ?? 'core') === 'core')
+      .map((tool) => {
       const schema = zodToJsonSchema(tool.input, { target: 'jsonSchema7', $refStrategy: 'none' }) as Record<
         string,
         unknown

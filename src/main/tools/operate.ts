@@ -60,6 +60,7 @@ function recordTargetFromResult(action: string, result: ActionResult): void {
 
 export const uiInspectTool: JarvisTool = {
   name: 'ui_inspect',
+  group: 'operate',
   description:
     'See what controls are on the current (or a named) window — a compact list of interactable elements (buttons, toggles, text fields, list items, ...) with a short-lived ref for each, never a raw accessibility tree. Use before ui_act when you don\'t already have a ref. Pass `query` to filter by name (e.g. "bluetooth"). Pass `ref` to get one previously-seen element\'s full detail instead.',
   risk: 'safe',
@@ -116,6 +117,7 @@ const ActInput = z.object({
 
 export const uiActTool: JarvisTool = {
   name: 'ui_act',
+  group: 'operate',
   description:
     'Act on one UI control — toggle, invoke/click, set a value, select an option, expand/collapse, focus, or scroll. Always resolves the target first (by ref, or by name/role/automationId within a window); if more than one element matches, nothing is sent and the real candidates are returned so you can disambiguate (e.g. by nth). toggle/select/expand/collapse take an implicit or explicit desired state, so repeating the same call or asking to "turn it back off" is always safe.',
   risk: (input) => classifyRisk(riskInputFor(input.target, input.intent)).risk,
@@ -134,6 +136,7 @@ export const uiActTool: JarvisTool = {
 
 export const uiWaitTool: JarvisTool = {
   name: 'ui_wait',
+  group: 'operate',
   description:
     'Wait (up to 10s) for a UI condition instead of polling ui_inspect yourself — an element appearing/disappearing, reaching a state, or the active window\'s title containing some text (useful right after opening something that takes a moment to load).',
   risk: 'safe',
@@ -164,6 +167,7 @@ const KeyboardInput = z.object({
 
 export const keyboardActTool: JarvisTool = {
   name: 'keyboard_act',
+  group: 'operate',
   description: 'Send a key chord or type text, optionally focusing a target element first. Prefer ui_act(set_value) for filling in a specific field when possible — use this for chords (Ctrl+S, Enter, Escape) or when a field has no Value pattern.',
   risk: (input) => classifyRisk(riskInputFor(input.target ?? {}, input.intent, input.keys)).risk,
   input: KeyboardInput,
@@ -198,6 +202,7 @@ const PointerInput = z.object({
 
 export const pointerActTool: JarvisTool = {
   name: 'pointer_act',
+  group: 'operate',
   description:
     'Last resort: click/scroll at a screen coordinate from a look_at_screen capture, only when UI Automation genuinely cannot operate the target (no accessible control — e.g. a custom-drawn canvas). Requires a fresh capture and a stated reason; rejected outright otherwise. Always prefer ui_act.',
   risk: (input) => classifyRisk({ intent: input.intent }).risk,

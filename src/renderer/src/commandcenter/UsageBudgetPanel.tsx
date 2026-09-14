@@ -34,6 +34,33 @@ interface BudgetConfig {
   monthlyHardUsd: number | null
   maxTurnTokens: number
   maxTurnWallMs: number
+  routingPolicy: 'optimized' | 'legacy'
+}
+
+interface CallRecord {
+  model: string
+  purpose: 'chain' | 'plan' | 'replan' | 'summary' | 'autolearn'
+  inputTokens: number
+  outputTokens: number
+  cacheWriteTokens: number
+  cacheReadTokens: number
+  costUsd: number
+  unpriced: boolean
+  contextTokens: number
+}
+
+interface TurnRecord {
+  turnId: string
+  route: string
+  routeReason: string
+  escalated: boolean
+  replans: number
+  calls: CallRecord[]
+  totalCostUsd: number
+  totalContextTokens: number
+  localHandled: boolean
+  startedAt: number
+  endedAt: number
 }
 
 interface BudgetStatus {
@@ -120,22 +147,31 @@ function LimitField({
 export default function UsageBudgetPanel(): React.JSX.Element {
   const [status, setStatus] = useState<BudgetStatus | null>(null)
   const [flash, setFlash] = useState<'daily' | 'monthly' | null>(null)
+  const [turns, setTurns] = useState<TurnRecord[]>([])
+  const [expanded, setExpanded] = useState<string | null>(null)
 
   const refresh = (): void => {
     window.jarvis.getBudgetStatus().then((s) => setStatus(s as BudgetStatus))
   }
 
+  const refreshTurns = (): void => {
+    window.jarvis.getRecentTurns().then((t) => setTurns(t as TurnRecord[]))
+  }
+
   useEffect(() => {
     refresh()
+    refreshTurns()
     const poll = setInterval(refresh, 15000)
-    const unsubscribe = window.jarvis.onBudgetWarning(({ period }) => {
+    const unsubscribeWarning = window.jarvis.onBudgetWarning(({ period }) => {
       setFlash(period)
       refresh()
       setTimeout(() => setFlash(null), 4000)
     })
+    const unsubscribeTurn = window.jarvis.onUsageTurn(() => refreshTurns())
     return () => {
       clearInterval(poll)
-      unsubscribe()
+      unsubscribeWarning()
+      unsubscribeTurn()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -174,6 +210,29 @@ export default function UsageBudgetPanel(): React.JSX.Element {
           }}
         >
           {config.protectionEnabled ? 'On' : 'Off'}
+        </button>
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '4px 0 8px' }}>
+        <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.7 }} title="Validation-only A/B toggle for the Cost + Context Optimization milestone — 'legacy' is the frozen v0.10.0-test.1 behavior.">
+          Routing policy
+        </span>
+        <button
+          onClick={() => setConfig({ routingPolicy: config.routingPolicy === 'optimized' ? 'legacy' : 'optimized' })}
+          style={{
+            fontFamily: 'inherit',
+            fontSize: 10,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            padding: '3px 10px',
+            background: 'rgba(79, 216, 255, 0.08)',
+            border: '1px solid var(--jarvis-cyan)',
+            color: 'var(--jarvis-cyan)',
+            borderRadius: 2,
+            cursor: 'pointer'
+          }}
+        >
+          {config.routingPolicy}
         </button>
       </div>
 
@@ -224,6 +283,56 @@ export default function UsageBudgetPanel(): React.JSX.Element {
       <div style={{ height: 8 }} />
       <Row label="All-time" value={usd(usage.allTime.estimatedCostUsd)} />
       <Row label="Sessions (all-time)" value={String(usage.allTime.sessionCount)} />
+
+      <div style={{ height: 8 }} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+        <span style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.7 }}>Recent turns</span>
+        <button
+          onClick={() => navigator.clipboard?.writeText(JSON.stringify(turns, null, 2))}
+          style={{
+            fontFamily: 'inherit',
+            fontSize: 10,
+            padding: '2px 8px',
+            background: 'rgba(79, 216, 255, 0.08)',
+            border: '1px solid var(--jarvis-hairline)',
+            color: 'var(--jarvis-cyan)',
+            borderRadius: 2,
+            cursor: 'pointer'
+          }}
+        >
+          Copy
+        </button>
+      </div>
+      {turns.length === 0 ? (
+        <EmptyState text="No turns recorded yet this session." />
+      ) : (
+        <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {turns.map((t) => (
+            <div key={t.turnId} style={{ fontSize: 10, border: '1px solid var(--jarvis-hairline)', borderRadius: 2, padding: '3px 5px' }}>
+              <div
+                style={{ display: 'flex', justifyContent: 'space-between', cursor: t.calls.length > 0 ? 'pointer' : 'default' }}
+                onClick={() => t.calls.length > 0 && setExpanded(expanded === t.turnId ? null : t.turnId)}
+              >
+                <span>
+                  <span style={{ color: t.localHandled ? 'var(--jarvis-emerald)' : 'var(--jarvis-cyan)' }}>{t.route}</span>
+                  {t.escalated ? ' ↑' : ''}
+                  {t.replans > 0 ? ` ↻${t.replans}` : ''}
+                </span>
+                <span style={{ opacity: 0.7 }}>{t.localHandled ? '0 tok' : `${usd(t.totalCostUsd)} · ${t.totalContextTokens.toLocaleString()} tok`}</span>
+              </div>
+              {expanded === t.turnId && (
+                <div style={{ marginTop: 3, paddingLeft: 6, opacity: 0.75 }}>
+                  {t.calls.map((c, i) => (
+                    <div key={i}>
+                      {c.purpose} · {c.model} · in {c.inputTokens} out {c.outputTokens} cacheR {c.cacheReadTokens} cacheW {c.cacheWriteTokens} · {c.unpriced ? 'unpriced' : usd(c.costUsd)}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </Panel>
   )
 }

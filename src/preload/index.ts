@@ -125,6 +125,9 @@ const jarvisAPI = {
   /** Fired at most once per 50/75/90% threshold crossed, per day/month period — see usage/budgetManager.ts. */
   onBudgetWarning: (cb: (payload: { period: 'daily' | 'monthly'; threshold: number; spentUsd: number; limitUsd: number }) => void) =>
     on('usage:warning', cb),
+  /** Per-turn routing/context/cost diagnostics (Cost + Context Optimization milestone) — see usage/turnLedger.ts. */
+  getRecentTurns: (): Promise<unknown[]> => ipcRenderer.invoke('usage:turns'),
+  onUsageTurn: (cb: (turn: Record<string, unknown>) => void) => on('usage:turn', cb),
 
   // --- Presence / hands-free (Command Center Presence panel + Ambient's presence mic) ---
   getPresenceStatus: (): Promise<unknown> => ipcRenderer.invoke('presence:status'),

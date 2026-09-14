@@ -8,6 +8,7 @@ import { resolveConfirmation, requestConfirmation } from './tools/confirmation'
 import { getToolActivityHistory } from './tools/activity'
 import { runToolStandalone } from './tools'
 import { getBudgetStatus, setBudgetConfig, type BudgetConfig } from './usage'
+import { getRecentTurns } from './usage/turnLedger'
 import { presence, type PresenceMicStatus } from './presence'
 import { contextManager } from './context'
 import { getCatalog } from './apps/catalog'
@@ -114,6 +115,10 @@ export function registerIpcHandlers(): void {
   // editing the master protection switch or any limit.
   ipcMain.handle('usage:budget-status', () => getBudgetStatus())
   ipcMain.handle('usage:budget-set-config', (_event, patch: Partial<BudgetConfig>) => setBudgetConfig(patch))
+  // Per-turn routing/context/cost diagnostics for the Usage & Budget
+  // panel's "Recent turns" table — see usage/turnLedger.ts. One-shot query
+  // on open; live updates arrive via the 'usage:turn' broadcast.
+  ipcMain.handle('usage:turns', () => getRecentTurns())
 
   ipcMain.handle('context:live', () => contextManager.getLiveContext())
   ipcMain.handle('context:persistent', () => contextManager.getPersistent())

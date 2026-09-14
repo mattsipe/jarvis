@@ -1,11 +1,14 @@
 import { createSttProvider, type SttProvider } from './stt'
 import { createTtsProvider, ElevenLabsTts } from './tts'
 import { runAgentTurn, type ToolCallInfo } from '../agent/loop'
-import { matchLocalCommand, matchEndPhrase, type LocalCommandMatch } from '../agent/localCommands'
+import { matchLocalCommand, matchEndPhrase, matchStopPhrase, type LocalCommandMatch } from '../agent/localCommands'
+import { matchOperateFollowup } from '../operate/followups'
 import { operateContext } from '../operate/context'
 import { broadcast } from '../window'
 import { TurnTimer } from './telemetry'
 import { usageTracker, budgetManager } from '../usage'
+import { getBudgetConfig } from '../usage/budgetConfig'
+import { recordTurn } from '../usage/turnLedger'
 import { config } from '../config'
 import { requestConfirmation, tryResolveConfirmationFromSpeech } from '../tools/confirmation'
 import { recordToolActivity } from '../tools/activity'
@@ -249,13 +252,33 @@ export class VoiceSession {
       return
     }
 
+    // "Stop"/"cancel"/"never mind" — an additional, phrase-based abort
+    // trigger alongside barge-in and the hotkey (see agent/loopOptimized.ts's
+    // task guard, which already reacts to activeAbortController.abort()).
+    // Costs nothing: no Claude call either way.
+    if (matchStopPhrase(text)) {
+      const wasActive = this.activeAbortController != null
+      this.activeAbortController?.abort()
+      this.send('voice:assistant-text', wasActive ? 'Stopping.' : 'Nothing to stop.')
+      this.send('hud:state', 'ambient')
+      this.send('voice:resume-listening', null)
+      return
+    }
+
     const timer = new TurnTimer()
     timer.mark('speechEnd')
     timer.mark('sttFinal')
     this.currentTurnTimer = timer
 
     const myTurnId = ++this.turnId
-    const local = matchLocalCommand(text)
+    // L0 local dispatch, cheapest first: deterministic phrase→tool
+    // commands (mute/volume/open-app/settings-page/time), then — only
+    // under the optimized routing policy — OperateContext follow-ups
+    // ("turn it back off", "click that"). Neither ever reaches
+    // runAgentTurn/Claude at all. See the Cost + Context Optimization
+    // plan's routing architecture.
+    const local: LocalCommandMatch | null =
+      matchLocalCommand(text) ?? (getBudgetConfig().routingPolicy === 'optimized' ? matchOperateFollowup(text) : null)
     const handler = local ? this.respondLocally(local, text, myTurnId, timer) : this.respond(text, myTurnId, timer)
     handler.catch((err) => {
       if (myTurnId !== this.turnId) return // superseded by a barge-in or session end — ignore
@@ -358,6 +381,19 @@ export class VoiceSession {
 
     if (myTurnId !== this.turnId) return
     this.turns.push({ userText: text, assistantText: spoken })
+    recordTurn({
+      turnId: id,
+      route: 'local',
+      routeReason: local.source ?? 'local-command',
+      escalated: false,
+      replans: 0,
+      calls: [],
+      totalCostUsd: 0,
+      totalContextTokens: 0,
+      localHandled: true,
+      startedAt: Date.now(),
+      endedAt: Date.now()
+    })
     this.send('voice:agent-done', { tier: 'local' })
   }
 
