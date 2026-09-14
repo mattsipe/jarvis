@@ -58,8 +58,16 @@ public static class Program
         "audioSetVolume" => Audio.SetVolume(RequireDouble(p, "percent")),
         "audioSetMute" => Audio.SetMute(RequireBool(p, "muted")),
         "steamCatalog" => SteamCatalog.Get(),
+        "launchExe" => AppLauncher.LaunchExe(RequireString(p, "path"), OptionalString(p, "arguments")),
+        "launchAumid" => AppLauncher.LaunchAumid(RequireString(p, "appUserModelId")),
         _ => throw new InvalidOperationException($"Unknown method: {method}")
     };
+
+    private static string RequireString(JsonNode? p, string field) =>
+        p?[field]?.GetValue<string>() ?? throw new ArgumentException($"Missing required param: {field}");
+
+    private static string? OptionalString(JsonNode? p, string field) =>
+        p?[field]?.GetValue<string>();
 
     private static long RequireLong(JsonNode? p, string field) =>
         p?[field]?.GetValue<long>() ?? throw new ArgumentException($"Missing required param: {field}");

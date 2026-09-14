@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events'
+import type { TransportStatus } from '../transport/status'
 
 export interface TranscriptEvent {
   text: string
@@ -16,6 +17,7 @@ export declare interface SttProvider {
   on(event: 'transcript', listener: (e: TranscriptEvent) => void): this
   on(event: 'error', listener: (err: Error) => void): this
   on(event: 'closed', listener: () => void): this
+  on(event: 'status', listener: (status: TransportStatus) => void): this
 }
 
 export abstract class SttProvider extends EventEmitter {

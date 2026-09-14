@@ -73,6 +73,31 @@ class PowerShellError extends Error {
  * captured on every failure (see cliXml.ts — raw CLIXML must never reach
  * Recent Actions/Claude, only the log file), and a self-test tool that
  * exercises each capability directly (see selfTest()).
+ *
+ * 4. Real-PC testing then reported New Outlook resolving but failing to
+ *    launch, treated as a regression from an earlier working release.
+ *    Re-auditing the code found the same *class* of bug as #3 one layer
+ *    up: apps/resolver.ts's alias lookup, when a previously-saved alias's
+ *    target no longer matches anything in the current catalog snapshot
+ *    (catalog staleness, or a rename upstream), fell back to treating the
+ *    saved value as a literal path/exe name safe for Start-Process — but
+ *    a saved AUMID-shaped alias (New Outlook's is a true UWP AUMID,
+ *    "PackageFamilyName!App") is not a path either. Fixed in resolveApp()
+ *    below by classifying the orphaned alias target by its own shape
+ *    (contains `!`  → packaged) instead of assuming 'shortcut'. Launching
+ *    itself was also hardened at the same time, generally rather than for
+ *    Outlook specifically: openApp()/launchByAppId() now call
+ *    jarvis-helper.exe's native launchExe/launchAumid (ProcessStartInfo/
+ *    ShellExecute and the real IApplicationActivationManager COM API,
+ *    respectively — see AppLauncher.cs) as the primary mechanism, since
+ *    both give a real, specific success/failure signal instead of a shell
+ *    exit code that only ever means "the command was accepted". PowerShell
+ *    Start-Process/explorer.exe shell:AppsFolder remain the fallback only
+ *    for when the helper itself isn't running. On top of that,
+ *    apps/launcher.ts now tries more than one discovered candidate for the
+ *    same requested name (e.g. an app registered both in Start Menu and in
+ *    the App Paths registry) before giving up, and remembers whichever one
+ *    actually worked as an alias so the next launch skips straight to it.
  */
 export class WindowsPlatformControl implements PlatformControl {
   readonly name = 'win32' as const
@@ -181,6 +206,15 @@ export class WindowsPlatformControl implements PlatformControl {
     }
   }
 
+  /**
+   * Packaged/UWP apps (New Outlook in particular — WebView2-based, often
+   * slow on a cold start) get a longer verification window than a plain
+   * exe. Never turns a real launch into a reported failure either way —
+   * see the comment above — this only affects how long the softer
+   * "no new window appeared yet" wording is deferred.
+   */
+  private static readonly PACKAGED_VERIFY_TIMEOUT_MS = 9000
+
   private async verifyNewWindowAppeared(beforeHwnds: Set<number>, timeoutMs = 4000): Promise<{ appeared: boolean; title?: string }> {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
@@ -200,10 +234,38 @@ export class WindowsPlatformControl implements PlatformControl {
     return { appeared: false }
   }
 
+  /**
+   * The real ShellExecute/CreateProcess mechanism via jarvis-helper.exe
+   * (see AppLauncher.cs) — primary path, since unlike Start-Process it
+   * throws a specific native reason on real failure. Falls back to
+   * PowerShell Start-Process only when the helper genuinely isn't
+   * running; if the helper IS running and the call itself throws, that's
+   * a real failure and is allowed to propagate so the caller (a candidate
+   * fallback loop, or this method's own catch) can react to it.
+   */
+  private async launchExeNative(target: string): Promise<void> {
+    try {
+      await jarvisHelper.launchExe(target)
+    } catch (err) {
+      if (jarvisHelper.isRunning()) throw err
+      await this.runPowerShell(`Start-Process ${this.psQuote(target)}`)
+    }
+  }
+
+  /** Same fallback shape as launchExeNative, for the AUMID activation API. */
+  private async launchAumidNative(appId: string): Promise<void> {
+    try {
+      await jarvisHelper.launchAumid(appId)
+    } catch (err) {
+      if (jarvisHelper.isRunning()) throw err
+      await this.runPowerShell(`explorer.exe shell:AppsFolder\\${appId}`)
+    }
+  }
+
   async openApp(nameOrPath: string): Promise<ToolResult> {
     const beforeHwnds = await this.snapshotWindowHwnds()
     try {
-      await this.runPowerShell(`Start-Process ${this.psQuote(nameOrPath)}`)
+      await this.launchExeNative(nameOrPath)
       const verified = await this.verifyNewWindowAppeared(beforeHwnds)
       return verified.appeared
         ? { ok: true, message: `Opened ${nameOrPath}.` }
@@ -211,18 +273,21 @@ export class WindowsPlatformControl implements PlatformControl {
     } catch (primaryErr) {
       const resolved = await this.resolveStartApp(nameOrPath)
       if (!resolved) return this.failure(`open "${nameOrPath}"`, primaryErr)
-      // Get-StartApps' AppID only works with Start-Process when it's a
-      // real filesystem path (an ordinary desktop shortcut/exe). Anything
-      // else — a true UWP AppUserModelID ("PackageFamilyName!AppId") *or*
-      // a Click-to-Run-style AppID that isn't `!`-shaped at all (Office
-      // apps: "Microsoft.Office.EXCEL.EXE.15" and siblings are the
-      // confirmed real-world case) — needs shell:AppsFolder instead, the
-      // same activation mechanism Explorer itself uses for both. Verified
-      // with Test-Path rather than guessed from the AppID's shape.
+      // Get-StartApps' AppID only works as a direct launch target when
+      // it's a real filesystem path (an ordinary desktop shortcut/exe).
+      // Anything else — a true UWP AppUserModelID ("PackageFamilyName!AppId")
+      // *or* a Click-to-Run-style AppID that isn't `!`-shaped at all
+      // (Office apps: "Microsoft.Office.EXCEL.EXE.15" and siblings are the
+      // confirmed real-world case) — needs AUMID activation instead, the
+      // same mechanism Explorer itself uses for both. Verified with
+      // Test-Path rather than guessed from the AppID's shape.
       try {
-        if (!resolved.isPath) await this.runPowerShell(`explorer.exe shell:AppsFolder\\${resolved.appId}`)
-        else await this.runPowerShell(`Start-Process ${this.psQuote(resolved.appId)}`)
-        const verified = await this.verifyNewWindowAppeared(beforeHwnds)
+        if (!resolved.isPath) await this.launchAumidNative(resolved.appId)
+        else await this.launchExeNative(resolved.appId)
+        const verified = await this.verifyNewWindowAppeared(
+          beforeHwnds,
+          resolved.isPath ? 4000 : WindowsPlatformControl.PACKAGED_VERIFY_TIMEOUT_MS
+        )
         return verified.appeared
           ? { ok: true, message: `Opened ${resolved.name}.` }
           : { ok: true, message: `Sent the command to open ${resolved.name}, but no new window appeared yet — it may still be starting.` }
@@ -232,12 +297,12 @@ export class WindowsPlatformControl implements PlatformControl {
     }
   }
 
-  /** Launches a packaged/UWP app directly by its already-known AppUserModelID — used by apps/resolver.ts once an app has been catalogued, skipping the name-guessing openApp() above entirely. Also covers Click-to-Run-style Office AppIDs now that apps/catalog.ts classifies those as "packaged" too — see the class doc comment's bug #3. */
+  /** Launches a packaged/UWP/Click-to-Run app directly by its already-known AppUserModelID — used by apps/launcher.ts once an app has been catalogued, skipping the name-guessing openApp() above entirely. See the class doc comment's bugs #3 and #4. */
   async launchByAppId(appId: string): Promise<ToolResult> {
     const beforeHwnds = await this.snapshotWindowHwnds()
     try {
-      await this.runPowerShell(`explorer.exe shell:AppsFolder\\${appId}`)
-      const verified = await this.verifyNewWindowAppeared(beforeHwnds)
+      await this.launchAumidNative(appId)
+      const verified = await this.verifyNewWindowAppeared(beforeHwnds, WindowsPlatformControl.PACKAGED_VERIFY_TIMEOUT_MS)
       return verified.appeared
         ? { ok: true, message: `Opened ${verified.title ?? 'it'}.` }
         : { ok: true, message: 'Sent the command to open it, but no new window appeared yet — it may still be starting.' }
@@ -247,22 +312,68 @@ export class WindowsPlatformControl implements PlatformControl {
   }
 
   /**
-   * Full Start Menu catalog (name + raw AppID + whether that AppID is a
-   * real filesystem path, for every entry) — see apps/catalog.ts, which
-   * uses `isPath` (not the AppID's shape) to decide how each app needs to
-   * be launched. Distinct from resolveStartApp(), which only needs the
-   * first match for the openApp() fallback above.
+   * Second discovery source for the app catalog, alongside Get-StartApps
+   * below — the "App Paths" registry, which maps a friendly exe name
+   * directly to a verified filesystem path (Test-Path-checked here, same
+   * as the Start Menu source). Kept as genuinely separate candidate
+   * entries rather than merged into the Start-Menu ones for the same
+   * name, since this is what gives apps/launcher.ts an independent,
+   * differently-launched fallback candidate for the same app — see the
+   * class doc comment's bug #4. Best-effort: an empty/missing key (or a
+   * PowerShell failure) just means the catalog falls back to Start Menu
+   * alone, which was already a complete, correct catalog before this was
+   * added.
+   */
+  private async listAppPathsEntries(): Promise<{ name: string; appId: string; isPath: boolean }[]> {
+    const script = `
+Get-ChildItem 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths' -ErrorAction SilentlyContinue | ForEach-Object {
+  $p = (Get-ItemProperty -LiteralPath $_.PSPath -ErrorAction SilentlyContinue).'(default)'
+  if ($p -and (Test-Path -LiteralPath $p -ErrorAction SilentlyContinue)) {
+    [pscustomobject]@{ Name = ($_.PSChildName -replace '\\.exe$',''); AppID = $p; IsPath = $true }
+  }
+} | ConvertTo-Json -Compress
+`.replace(/\r?\n/g, ' ')
+    try {
+      const out = await this.runPowerShell(script)
+      if (!out) return []
+      const parsed = JSON.parse(out) as { Name: string; AppID: string; IsPath: boolean } | { Name: string; AppID: string; IsPath: boolean }[]
+      const list = Array.isArray(parsed) ? parsed : [parsed]
+      return list.map((e) => ({ name: e.Name, appId: e.AppID, isPath: e.IsPath }))
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * Full app catalog (name + raw AppID + whether that AppID is a real
+   * filesystem path, for every entry) — see apps/catalog.ts, which uses
+   * `isPath` (not the AppID's shape) to decide how each app needs to be
+   * launched. Merges Get-StartApps with the App Paths registry above,
+   * deduped only on an exact (name, target) match so a genuinely
+   * different candidate for the same display name (e.g. a Start-Menu
+   * AUMID alongside an App-Paths exe) survives as a separate entry.
+   * Distinct from resolveStartApp(), which only needs the first
+   * Start-Menu match for the openApp() fallback above.
    */
   async listInstalledApps(): Promise<{ name: string; appId: string; isPath: boolean }[]> {
     const out = await this.runPowerShell(
       "Get-StartApps | Select-Object Name, AppID, @{Name='IsPath';Expression={ [bool](Test-Path -LiteralPath $_.AppID -ErrorAction SilentlyContinue) }} | ConvertTo-Json -Compress"
     )
-    if (!out) return []
-    const parsed = JSON.parse(out) as
-      | { Name: string; AppID: string; IsPath: boolean }
-      | { Name: string; AppID: string; IsPath: boolean }[]
-    const list = Array.isArray(parsed) ? parsed : [parsed]
-    return list.map((e) => ({ name: e.Name, appId: e.AppID, isPath: e.IsPath }))
+    const parsed = out
+      ? (JSON.parse(out) as { Name: string; AppID: string; IsPath: boolean } | { Name: string; AppID: string; IsPath: boolean }[])
+      : []
+    const startMenu = (Array.isArray(parsed) ? parsed : [parsed]).map((e) => ({ name: e.Name, appId: e.AppID, isPath: e.IsPath }))
+
+    const appPaths = await this.listAppPathsEntries()
+    const seen = new Set(startMenu.map((e) => `${e.name.toLowerCase()}|${e.appId}`))
+    for (const entry of appPaths) {
+      const key = `${entry.name.toLowerCase()}|${entry.appId}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        startMenu.push(entry)
+      }
+    }
+    return startMenu
   }
 
   async closeApp(name: string): Promise<ToolResult> {

@@ -1,14 +1,9 @@
 import { z } from 'zod'
-import type { JarvisTool, ToolContext, ToolResult } from './registry'
-import { resolveApp } from '../apps/resolver'
+import type { JarvisTool } from './registry'
+import { resolveApp, candidatesForLaunch } from '../apps/resolver'
 import { getCatalog } from '../apps/catalog'
-
-/** Launches an already-resolved catalog entry via the right platform primitive for its kind. */
-async function launchResolved(entry: { kind: string; launchTarget: string; appId?: string }, ctx: ToolContext): Promise<ToolResult> {
-  if (entry.kind === 'packaged') return ctx.platform.launchByAppId(entry.appId ?? entry.launchTarget)
-  if (entry.kind === 'steam-game') return ctx.platform.launchSteamGame(entry.appId ?? entry.launchTarget)
-  return ctx.platform.openApp(entry.launchTarget)
-}
+import { launchWithFallback, makePlatformLauncher } from '../apps/launcher'
+import { logInfo } from '../logger'
 
 export const openAppTool: JarvisTool = {
   name: 'open_app',
@@ -29,7 +24,35 @@ export const openAppTool: JarvisTool = {
         data: { ambiguous: true, candidates: resolution.candidates }
       }
     }
-    return launchResolved(resolution.entry, ctx)
+
+    const candidates = candidatesForLaunch(resolution.entry)
+    const { result, attempts, winningCandidate, usedFallback } = await launchWithFallback(candidates, makePlatformLauncher(ctx.platform))
+
+    // Concise in Recent Actions (result.message, untouched); the full
+    // requested-name → candidates → attempts → winner trail only ever
+    // goes to the log — see windows.ts's class doc comment bug #4.
+    logInfo(
+      'apps:launch',
+      `"${input.name}" candidates=[${candidates.map((c) => `${c.displayName}(${c.kind})`).join(', ')}] ` +
+        `attempts=[${attempts.map((a) => `${a.displayName}:${a.ok ? 'ok' : 'fail'}`).join(', ')}] ` +
+        `winner=${winningCandidate?.displayName ?? 'none'}`
+    )
+
+    // A fallback candidate is what actually worked, or the top-scored
+    // candidate itself only matched because of a genuine ambiguity (not
+    // the case here — this only runs post-disambiguation) — remember it
+    // so the next launch for this exact name goes straight to what's
+    // confirmed to work, same mechanism as "remember" (kind: "alias").
+    if (usedFallback && winningCandidate) {
+      ctx.context.memory.upsert({
+        kind: 'alias',
+        subject: input.name,
+        content: winningCandidate.appId ?? winningCandidate.launchTarget,
+        source: 'explicit'
+      })
+    }
+
+    return { ...result, diagnostics: { ...result.diagnostics, launchAttempts: attempts } }
   }
 }
 

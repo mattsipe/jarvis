@@ -8,6 +8,8 @@ export interface ToolDiagnostics {
   exitCode?: number | null
   /** Captured stderr (or the closest equivalent), truncated — never secret material, just OS/PowerShell error text. */
   stderr?: string
+  /** open_app's full candidate-fallback trail (see apps/launcher.ts) — kept out of `message`/Recent Actions, available for the log and a diagnostics view. */
+  launchAttempts?: { displayName: string; kind: string; ok: boolean; message: string }[]
 }
 
 export interface ToolResult {

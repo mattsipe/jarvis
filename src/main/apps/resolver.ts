@@ -79,8 +79,23 @@ export function resolveApp(query: string): AppResolution {
   if (aliasTarget) {
     const aliasMatch = catalog.find((e) => e.displayName.toLowerCase() === aliasTarget.toLowerCase() || e.launchTarget === aliasTarget)
     if (aliasMatch) return { entry: aliasMatch }
-    // Alias points somewhere not in the current catalog snapshot (e.g. a raw path/name Weston gave directly) — launch it as-is.
-    return { entry: { displayName: aliasTarget, kind: 'shortcut', launchTarget: aliasTarget } }
+    // Alias points somewhere not in the current catalog snapshot (catalog
+    // staleness, a rename upstream, or a raw path/name Weston gave
+    // directly). Classify it by its own shape rather than assuming it's
+    // a safe exe/path — a saved AUMID-shaped alias (e.g. New Outlook's
+    // own "PackageFamilyName!App") is not a real path, and Start-Process
+    // fails on it exactly the way it failed on Excel's Click-to-Run
+    // AppID (see windows.ts's class doc comment bug #3). A confirmed
+    // real-PC regression traced to exactly this branch — see bug #4.
+    const looksLikeAumid = aliasTarget.includes('!')
+    return {
+      entry: {
+        displayName: aliasTarget,
+        kind: looksLikeAumid ? 'packaged' : 'shortcut',
+        launchTarget: aliasTarget,
+        appId: looksLikeAumid ? aliasTarget : undefined
+      }
+    }
   }
 
   const scored = catalog
@@ -93,4 +108,31 @@ export function resolveApp(query: string): AppResolution {
     return { entry: scored[0].entry }
   }
   return { ambiguous: true, candidates: scored.slice(0, 4).map((x) => x.entry) }
+}
+
+/**
+ * Ordered launch candidates for an already-resolved entry — the resolved
+ * entry itself first, then any *other* catalog entries with the exact
+ * same display name but a different launch target (e.g. an app
+ * discovered both via Get-StartApps and the App Paths registry — see
+ * windows.ts's listInstalledApps()). Only exact-name duplicates are ever
+ * considered interchangeable here; this deliberately never substitutes a
+ * different *app* (e.g. it will never offer "Outlook classic" as a
+ * fallback for "new Outlook") — that distinction is what resolveApp()'s
+ * ambiguity check is for, and it's a real semantic choice a user should
+ * be asked about, not one apps/launcher.ts should silently guess.
+ * Capped at 3 candidates, since a real app has at most a couple of
+ * genuinely distinct discovery-source representations.
+ */
+export function candidatesForLaunch(entry: AppCatalogEntry): AppCatalogEntry[] {
+  const sameName = getCatalog().filter((e) => e.displayName.toLowerCase() === entry.displayName.toLowerCase())
+  const ordered = [entry, ...sameName.filter((e) => e.launchTarget !== entry.launchTarget)]
+  const seen = new Set<string>()
+  const deduped: AppCatalogEntry[] = []
+  for (const candidate of ordered) {
+    if (seen.has(candidate.launchTarget)) continue
+    seen.add(candidate.launchTarget)
+    deduped.push(candidate)
+  }
+  return deduped.slice(0, 3)
 }

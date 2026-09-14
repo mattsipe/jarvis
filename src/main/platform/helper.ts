@@ -199,6 +199,29 @@ class HelperClient {
     return this.call('steamCatalog')
   }
 
+  /**
+   * ShellExecute a real filesystem target (.exe, .lnk, or anything else
+   * Windows has a shell association for) via native ProcessStartInfo —
+   * see AppLauncher.cs for why this replaces PowerShell's Start-Process
+   * as the primary path. Throws with a specific native reason (a real
+   * Win32Exception message, not a shell exit code) on real failure.
+   */
+  launchExe(path: string, args?: string): Promise<{ processId: number | null }> {
+    return this.call('launchExe', { path, arguments: args ?? '' })
+  }
+
+  /**
+   * Activate a packaged/UWP/MSIX AppUserModelID via the real Windows
+   * activation API (IApplicationActivationManager) — see AppLauncher.cs.
+   * Covers true UWP apps, Windows' own built-in packaged apps, and
+   * Click-to-Run-style Office AppIDs alike; replaces
+   * `explorer.exe shell:AppsFolder\...`, which can report success even
+   * when the target silently failed to activate.
+   */
+  launchAumid(appUserModelId: string): Promise<{ processId: number }> {
+    return this.call('launchAumid', { appUserModelId })
+  }
+
   /** Called once at app shutdown — best-effort, never blocks quitting. */
   stop(): void {
     if (this.restartTimer) clearTimeout(this.restartTimer)

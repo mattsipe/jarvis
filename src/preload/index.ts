@@ -41,6 +41,9 @@ const jarvisAPI = {
     on('voice:error', cb),
   /** Per-turn latency waterfall snapshot — see voice/telemetry.ts and the Command Center diagnostics panel. */
   onLatency: (cb: (payload: Record<string, unknown>) => void) => on('voice:latency', cb),
+  /** Live STT/TTS connection diagnostics (state, retry count, last error) — see voice/transport/status.ts and the Command Center Voice Transport panel. */
+  onTransportStatus: (cb: (status: { provider: 'deepgram' | 'elevenlabs'; state: string; retryCount: number; lastError: string | null; updatedAt: number }) => void) =>
+    on('voice:transport-status', cb),
 
   // --- Continuous conversation (M2 follow-up) ---
   /** Tell main the actual audio playback (not just TTS generation) has finished. */

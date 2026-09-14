@@ -1,5 +1,5 @@
 import { createSttProvider, type SttProvider } from './stt'
-import { ElevenLabsTts } from './tts/elevenlabs'
+import { createTtsProvider, ElevenLabsTts } from './tts'
 import { runAgentTurn, type ToolCallInfo } from '../agent/loop'
 import { matchLocalCommand, matchEndPhrase, type LocalCommandMatch } from '../agent/localCommands'
 import { broadcast } from '../window'
@@ -96,19 +96,22 @@ export class VoiceSession {
       if (e.text) this.send('voice:transcript', { text: e.text, isFinal: e.isFinal })
       if (e.speechFinal) this.finishUtterance()
     })
+    stt.on('status', (status) => this.send('voice:transport-status', status))
     stt.on('error', (err) => {
       if (this.utteranceFinished) return
-      // An STT-connection failure (bad key, network/firewall block, etc.)
-      // is unrecoverable for this session — previously this only sent the
-      // error and left the session dangling (mic still open, nothing ever
-      // transcribing again). End it cleanly instead so the next
-      // hotkey/button press starts fresh rather than trying to *end* a
+      // DeepgramStt now retries a transient failure internally (bounded,
+      // with backoff — see stt/deepgram.ts) before ever emitting this
+      // event, so reaching here means either the retry budget was
+      // exhausted or the failure was fatal (a bad API key) from the
+      // start — genuinely unrecoverable for this listening phase. Ending
+      // the session cleanly is the "easy retry" path itself: the next
+      // hotkey press starts a fresh one rather than trying to *end* a
       // session that never really worked. hud:state stays on 'error'
       // (its own auto-revert timer returns to ambient — see hudStore.ts)
-      // instead of endSession()'s usual immediate 'ambient' broadcast,
-      // so the error is actually visible for a moment.
+      // instead of endSession()'s usual immediate 'ambient' broadcast, so
+      // the error is actually visible for a moment.
       this.utteranceFinished = true
-      this.send('voice:error', { message: err.message, stage: 'stt' })
+      this.send('voice:error', { message: `${err.message} Press the hotkey to try again.`, stage: 'stt' })
       this.send('hud:state', 'error')
       this.terminate()
     })
@@ -296,8 +299,13 @@ export class VoiceSession {
     })
     tts.on('error', (err) => {
       if (myTurnId !== this.turnId) return
+      // Never ends the session or the turn — ElevenLabsTts always still
+      // emits 'done' right after this (see its class doc comment), so
+      // the turn degrades to text-only (already sent — see respond()) and
+      // listening resumes normally for the next turn.
       this.send('voice:error', { message: err.message, stage: 'tts' })
     })
+    tts.on('status', (status) => this.send('voice:transport-status', status))
   }
 
   /**
@@ -331,7 +339,7 @@ export class VoiceSession {
 
     const ttsGate = budgetManager.checkElevenLabsSynthesis()
     if (ttsGate.allowed) {
-      const tts = new ElevenLabsTts()
+      const tts = createTtsProvider()
       this.activeTts = tts
       this.wireTts(tts, myTurnId, timer)
       tts.connect()
@@ -355,7 +363,7 @@ export class VoiceSession {
     const controller = new AbortController()
     this.activeAbortController = controller
 
-    const tts = new ElevenLabsTts()
+    const tts = createTtsProvider()
     this.activeTts = tts
     let firstSentenceSeen = false
     this.wireTts(tts, myTurnId, timer)
