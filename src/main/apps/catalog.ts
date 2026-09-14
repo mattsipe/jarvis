@@ -3,6 +3,7 @@ import { join } from 'path'
 import { readFileSync, writeFileSync } from 'fs'
 import { getPlatformControl } from '../platform'
 import { jarvisHelper } from '../platform/helper'
+import { classifyAppKind } from './classify'
 import { logInfo, logError } from '../logger'
 
 export type AppKind = 'packaged' | 'shortcut' | 'exe' | 'steam-game'
@@ -39,9 +40,12 @@ export async function refreshCatalog(): Promise<void> {
 
   try {
     const apps = await getPlatformControl().listInstalledApps()
-    for (const { name, appId } of apps) {
-      const isPackaged = /![^!]+$/.test(appId)
-      entries.push({ displayName: name, kind: isPackaged ? 'packaged' : 'shortcut', launchTarget: appId, appId })
+    for (const { name, appId, isPath } of apps) {
+      // isPath comes from the platform adapter asking Windows directly
+      // (Test-Path) rather than guessing from the AppID's shape — see
+      // classify.ts for exactly why (the confirmed real-world case this
+      // fixes: Office's Click-to-Run AppIDs).
+      entries.push({ displayName: name, kind: classifyAppKind(isPath), launchTarget: appId, appId })
     }
   } catch (err) {
     logError('apps:catalog', `installed-app enumeration failed: ${(err as Error).message}`)

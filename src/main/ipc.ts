@@ -7,7 +7,7 @@ import { resolveConfirmation, requestConfirmation } from './tools/confirmation'
 import { getToolActivityHistory } from './tools/activity'
 import { runToolStandalone } from './tools'
 import { getBudgetStatus, setBudgetConfig, type BudgetConfig } from './usage'
-import { presence } from './presence'
+import { presence, type PresenceMicStatus } from './presence'
 import { contextManager } from './context'
 import { config, getConfigDiagnostics, saveApiKeys } from './config'
 import { checkForUpdates, installUpdateAndRestart, getUpdateState } from './update/updater'
@@ -158,8 +158,22 @@ export function registerIpcHandlers(): void {
     await presence.retryEngine()
     return presence.status()
   })
+  ipcMain.handle('presence:set-sensitivity', (_event, sensitivity: number) => {
+    presence.setSensitivity(sensitivity)
+    return presence.status()
+  })
+  ipcMain.handle('presence:set-consecutive-frames', (_event, consecutiveFrames: number) => {
+    presence.setConsecutiveFrames(consecutiveFrames)
+    return presence.status()
+  })
   ipcMain.on('presence:audio-chunk', (_event, chunk: ArrayBuffer) => {
     presence.ingestAudioChunk(chunk)
+  })
+  // One-shot from audio/presenceCapture.ts right after it opens the mic —
+  // see PresenceMicStatus for why the actual achieved sample rate/channels
+  // can't just be assumed from what was requested.
+  ipcMain.on('presence:report-mic-status', (_event, status: PresenceMicStatus) => {
+    presence.reportMicStatus(status)
   })
 
   // Command Center's Memory panel — lists/edits/deletes what JARVIS

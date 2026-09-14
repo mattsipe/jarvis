@@ -55,8 +55,28 @@ function warn(label, detail) {
   console.log(`  warn  ${label}${detail ? ` — ${detail}` : ''}`)
 }
 
+/**
+ * electron-builder's unpacked output layout differs by platform: Windows
+ * and Linux put `resources/` directly under the appOutDir, while macOS
+ * nests everything inside a `<ProductName>.app/Contents/` bundle instead.
+ * Only the Windows layout ever actually ships, but this script also runs
+ * during local macOS dev builds (via the afterPack hook, on every build,
+ * not just Windows ones) — so both need to resolve correctly.
+ */
+function resolveResourcesDir(baseDir) {
+  const direct = join(baseDir, 'resources')
+  if (existsSync(join(direct, 'app.asar'))) return direct
+  const appBundle = readdirSync(baseDir).find((f) => f.endsWith('.app'))
+  if (appBundle) {
+    const nested = join(baseDir, appBundle, 'Contents', 'Resources')
+    if (existsSync(join(nested, 'app.asar'))) return nested
+  }
+  return direct // let the caller's existsSync check produce the real error message
+}
+
 async function main() {
-  const asarPath = join(unpackedDir, 'resources', 'app.asar')
+  const resourcesDir = resolveResourcesDir(unpackedDir)
+  const asarPath = join(resourcesDir, 'app.asar')
   if (!existsSync(asarPath)) {
     console.error(`No app.asar found at ${asarPath} — is "${unpackedDir}" really an electron-builder unpacked output directory?`)
     process.exit(2)
@@ -137,14 +157,14 @@ async function main() {
     }
 
     console.log('\n=== extraResources (files placed outside the asar) ===')
-    const wakewordDir = join(unpackedDir, 'resources', 'wakeword')
+    const wakewordDir = join(resourcesDir, 'wakeword')
     for (const model of ['melspectrogram.onnx', 'embedding_model.onnx', 'hey_jarvis_v0.1.onnx']) {
       const p = join(wakewordDir, model)
       if (existsSync(p)) pass(`resources/wakeword/${model}`)
       else fail(`resources/wakeword/${model}`, 'missing — presence/wakeword.ts cannot load the engine without it')
     }
 
-    const helperPath = join(unpackedDir, 'resources', 'jarvis-helper.exe')
+    const helperPath = join(resourcesDir, 'jarvis-helper.exe')
     if (existsSync(helperPath)) {
       pass('resources/jarvis-helper.exe')
     } else if (REQUIRE_JARVIS_HELPER) {

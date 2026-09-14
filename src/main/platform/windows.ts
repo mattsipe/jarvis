@@ -4,18 +4,26 @@ import { existsSync } from 'fs'
 import { app } from 'electron'
 import { join } from 'path'
 import os from 'os'
-import { logError } from '../logger'
+import { logError, logInfo } from '../logger'
 import { jarvisHelper } from './helper'
+import { stripCliXml } from './cliXml'
 import type { PlatformControl, SystemStatusInfo, ToolResult } from './types'
 
 const execFileAsync = promisify(execFile)
 
-/** Carries the process exit code and captured stderr through to the ToolResult — see failure() below. */
+/**
+ * Carries the process exit code and captured stderr through to the
+ * ToolResult — see failure() below. `stderr` is CLIXML-stripped (safe for
+ * Recent Actions/Claude to see); `rawStderr` is untouched and only ever
+ * reaches the log file, for the rare case the stripped summary isn't
+ * enough to diagnose something.
+ */
 class PowerShellError extends Error {
   constructor(
     message: string,
     readonly exitCode: number | null,
-    readonly stderr: string
+    readonly stderr: string,
+    readonly rawStderr: string
   ) {
     super(message)
   }
@@ -43,12 +51,28 @@ class PowerShellError extends Error {
  *    every volume/mute call with a parse error. Fixed by wrapping the C#
  *    in a *single*-quoted PowerShell string instead (it contains no
  *    apostrophes, so it needs no escaping at all).
+ * 3. `openApp`'s AppID classification assumed only true UWP/packaged apps
+ *    need `shell:AppsFolder` (detected by a `!` in the AppID) and every
+ *    other AppID is a real filesystem path safe for `Start-Process`. A
+ *    real-PC test with "open Excel" disproved that: Office's Click-to-Run
+ *    AppIDs (`Microsoft.Office.EXCEL.EXE.15` and siblings for Word,
+ *    PowerPoint, etc.) are neither `!`-shaped nor a real path — they only
+ *    resolve through the same `shell:AppsFolder` activation Explorer uses
+ *    for genuinely packaged apps. Fixed by asking Windows directly
+ *    (`Test-Path` on the AppID) instead of guessing from its shape — see
+ *    resolveStartApp() and apps/catalog.ts, which classifies the catalog
+ *    the same way. Launches are now also verified (a new window actually
+ *    appearing, via the helper's window list) rather than trusting that
+ *    `shell:AppsFolder`/`Start-Process` returning success means the target
+ *    really opened — `explorer.exe shell:AppsFolder\...` in particular can
+ *    report success even when the target silently failed to activate.
  *
  * Everything else here is hardening so the next real-Windows run reports
  * an exact cause instead of a bare failure: explicit (non-PATH-dependent)
- * resolution of powershell.exe, exit code + stderr captured on every
- * failure, and a self-test tool that exercises each capability directly
- * (see selfTest()).
+ * resolution of powershell.exe, exit code + CLIXML-stripped stderr
+ * captured on every failure (see cliXml.ts — raw CLIXML must never reach
+ * Recent Actions/Claude, only the log file), and a self-test tool that
+ * exercises each capability directly (see selfTest()).
  */
 export class WindowsPlatformControl implements PlatformControl {
   readonly name = 'win32' as const
@@ -72,11 +96,12 @@ export class WindowsPlatformControl implements PlatformControl {
 
   private toPowerShellError(err: unknown): PowerShellError {
     const e = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string }
-    const stderr = (e.stderr ?? '').trim()
+    const rawStderr = (e.stderr ?? '').trim()
+    const stderr = stripCliXml(rawStderr)
     const exitCode = typeof e.code === 'number' ? e.code : null
     const spawnIssue = typeof e.code === 'string' ? e.code : null // e.g. 'ENOENT' (powershell.exe not found), 'ETIMEDOUT'
     const detail = stderr || (spawnIssue ? `spawn failed: ${spawnIssue}` : e.message)
-    return new PowerShellError(detail.slice(0, 500), exitCode, stderr)
+    return new PowerShellError(detail.slice(0, 500), exitCode, stderr, rawStderr)
   }
 
   /** Every script goes through -EncodedCommand — see the class doc comment for why. */
@@ -102,7 +127,10 @@ export class WindowsPlatformControl implements PlatformControl {
   /** Shared failure path — logs the real cause and carries exit code/stderr into the ToolResult for Command Center + jarvis.log. */
   private failure(action: string, err: unknown): ToolResult {
     if (err instanceof PowerShellError) {
-      logError('platform:windows', `${action} failed (exit ${err.exitCode ?? 'n/a'}): ${err.message}`)
+      // Full, unsanitized stderr only ever goes to the log file — Recent
+      // Actions and Claude only ever see err.message/err.stderr, which are
+      // already CLIXML-stripped (see toPowerShellError/stripCliXml).
+      logError('platform:windows', `${action} failed (exit ${err.exitCode ?? 'n/a'}): ${err.rawStderr || err.message}`)
       return {
         ok: false,
         message: `Couldn't ${action}: ${err.message}`,
@@ -114,60 +142,127 @@ export class WindowsPlatformControl implements PlatformControl {
     return { ok: false, message: `Couldn't ${action}: ${message}` }
   }
 
-  /** Resolves a display name (e.g. "Steam", "Chrome") to a Start Menu AppID via Get-StartApps. */
-  private async resolveStartApp(name: string): Promise<{ name: string; appId: string } | null> {
-    const script = `Get-StartApps | Where-Object { $_.Name -like ${this.psQuote(`*${name}*`)} } | Select-Object -First 1 | ConvertTo-Json -Compress`
+  /**
+   * Resolves a display name (e.g. "Steam", "Chrome", "Excel") to a Start
+   * Menu AppID via Get-StartApps, along with whether that AppID is
+   * actually a real filesystem path — see the class doc comment's bug #3
+   * for why this can't be inferred from the AppID's shape (a `!` in it)
+   * alone.
+   */
+  private async resolveStartApp(name: string): Promise<{ name: string; appId: string; isPath: boolean } | null> {
+    const script = `Get-StartApps | Where-Object { $_.Name -like ${this.psQuote(`*${name}*`)} } | Select-Object -First 1 -Property Name, AppID, @{Name='IsPath';Expression={ [bool](Test-Path -LiteralPath $_.AppID -ErrorAction SilentlyContinue) }} | ConvertTo-Json -Compress`
     try {
       const out = await this.runPowerShell(script)
       if (!out) return null
-      const parsed = JSON.parse(out) as { Name: string; AppID: string }
-      return { name: parsed.Name, appId: parsed.AppID }
+      const parsed = JSON.parse(out) as { Name: string; AppID: string; IsPath: boolean }
+      return { name: parsed.Name, appId: parsed.AppID, isPath: parsed.IsPath }
     } catch {
       return null
     }
   }
 
+  /**
+   * Best-effort confirmation a launch actually resulted in a new window —
+   * see the class doc comment's bug #3. `explorer.exe shell:AppsFolder\...`
+   * in particular can report success (exit 0) even when the target
+   * silently failed to activate, since the command is just handed off to
+   * an already-running Explorer process asynchronously. Never turns a real
+   * launch into a reported failure just because the app is slow to open a
+   * window (some take a while, or start minimized/in the tray) — it only
+   * softens an unqualified "Opened X" into an honest "sent the command,
+   * but no new window showed up yet" when nothing appeared in time.
+   */
+  private async snapshotWindowHwnds(): Promise<Set<number>> {
+    try {
+      const { windows } = await jarvisHelper.listWindows()
+      return new Set(windows.map((w) => w.hwnd))
+    } catch {
+      return new Set()
+    }
+  }
+
+  private async verifyNewWindowAppeared(beforeHwnds: Set<number>, timeoutMs = 4000): Promise<{ appeared: boolean; title?: string }> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      try {
+        const { windows } = await jarvisHelper.listWindows()
+        const newWindow = windows.find((w) => !beforeHwnds.has(w.hwnd))
+        if (newWindow) {
+          logInfo('platform:windows', `launch verified: new window "${newWindow.title || newWindow.processName}"`)
+          return { appeared: true, title: newWindow.title || newWindow.processName }
+        }
+      } catch {
+        return { appeared: false } // helper unavailable — can't verify, don't block the result on it
+      }
+    }
+    logInfo('platform:windows', `launch verification timed out after ${timeoutMs}ms — no new window seen (may just be slow to start)`)
+    return { appeared: false }
+  }
+
   async openApp(nameOrPath: string): Promise<ToolResult> {
+    const beforeHwnds = await this.snapshotWindowHwnds()
     try {
       await this.runPowerShell(`Start-Process ${this.psQuote(nameOrPath)}`)
-      return { ok: true, message: `Opened ${nameOrPath}.` }
+      const verified = await this.verifyNewWindowAppeared(beforeHwnds)
+      return verified.appeared
+        ? { ok: true, message: `Opened ${nameOrPath}.` }
+        : { ok: true, message: `Sent the command to open ${nameOrPath}, but no new window appeared yet — it may still be starting.` }
     } catch (primaryErr) {
       const resolved = await this.resolveStartApp(nameOrPath)
       if (!resolved) return this.failure(`open "${nameOrPath}"`, primaryErr)
-      // Get-StartApps' AppID for a real UWP/packaged app is
-      // "PackageFamilyName!AppId" — only that form works with
-      // shell:AppsFolder. For an ordinary desktop app (Chrome, Steam,
-      // etc.) the AppID is a filesystem path to its shortcut/exe, and
-      // shell:AppsFolder silently does nothing with a raw path — that
-      // was the second real bug here. Launch it directly instead.
-      const isPackagedAppId = /![^!]+$/.test(resolved.appId)
+      // Get-StartApps' AppID only works with Start-Process when it's a
+      // real filesystem path (an ordinary desktop shortcut/exe). Anything
+      // else — a true UWP AppUserModelID ("PackageFamilyName!AppId") *or*
+      // a Click-to-Run-style AppID that isn't `!`-shaped at all (Office
+      // apps: "Microsoft.Office.EXCEL.EXE.15" and siblings are the
+      // confirmed real-world case) — needs shell:AppsFolder instead, the
+      // same activation mechanism Explorer itself uses for both. Verified
+      // with Test-Path rather than guessed from the AppID's shape.
       try {
-        if (isPackagedAppId) await this.runPowerShell(`explorer.exe shell:AppsFolder\\${resolved.appId}`)
+        if (!resolved.isPath) await this.runPowerShell(`explorer.exe shell:AppsFolder\\${resolved.appId}`)
         else await this.runPowerShell(`Start-Process ${this.psQuote(resolved.appId)}`)
-        return { ok: true, message: `Opened ${resolved.name}.` }
+        const verified = await this.verifyNewWindowAppeared(beforeHwnds)
+        return verified.appeared
+          ? { ok: true, message: `Opened ${resolved.name}.` }
+          : { ok: true, message: `Sent the command to open ${resolved.name}, but no new window appeared yet — it may still be starting.` }
       } catch (fallbackErr) {
         return this.failure(`launch ${resolved.name}`, fallbackErr)
       }
     }
   }
 
-  /** Launches a packaged/UWP app directly by its already-known AppUserModelID — used by apps/resolver.ts once an app has been catalogued, skipping the name-guessing openApp() above entirely. */
+  /** Launches a packaged/UWP app directly by its already-known AppUserModelID — used by apps/resolver.ts once an app has been catalogued, skipping the name-guessing openApp() above entirely. Also covers Click-to-Run-style Office AppIDs now that apps/catalog.ts classifies those as "packaged" too — see the class doc comment's bug #3. */
   async launchByAppId(appId: string): Promise<ToolResult> {
+    const beforeHwnds = await this.snapshotWindowHwnds()
     try {
       await this.runPowerShell(`explorer.exe shell:AppsFolder\\${appId}`)
-      return { ok: true, message: 'Opened.' }
+      const verified = await this.verifyNewWindowAppeared(beforeHwnds)
+      return verified.appeared
+        ? { ok: true, message: `Opened ${verified.title ?? 'it'}.` }
+        : { ok: true, message: 'Sent the command to open it, but no new window appeared yet — it may still be starting.' }
     } catch (err) {
       return this.failure('open that app', err)
     }
   }
 
-  /** Full Start Menu catalog (name + raw AppID for every entry) — see apps/catalog.ts. Distinct from resolveStartApp(), which only needs the first match for the openApp() fallback above. */
-  async listInstalledApps(): Promise<{ name: string; appId: string }[]> {
-    const out = await this.runPowerShell('Get-StartApps | Select-Object Name,AppID | ConvertTo-Json -Compress')
+  /**
+   * Full Start Menu catalog (name + raw AppID + whether that AppID is a
+   * real filesystem path, for every entry) — see apps/catalog.ts, which
+   * uses `isPath` (not the AppID's shape) to decide how each app needs to
+   * be launched. Distinct from resolveStartApp(), which only needs the
+   * first match for the openApp() fallback above.
+   */
+  async listInstalledApps(): Promise<{ name: string; appId: string; isPath: boolean }[]> {
+    const out = await this.runPowerShell(
+      "Get-StartApps | Select-Object Name, AppID, @{Name='IsPath';Expression={ [bool](Test-Path -LiteralPath $_.AppID -ErrorAction SilentlyContinue) }} | ConvertTo-Json -Compress"
+    )
     if (!out) return []
-    const parsed = JSON.parse(out) as { Name: string; AppID: string } | { Name: string; AppID: string }[]
+    const parsed = JSON.parse(out) as
+      | { Name: string; AppID: string; IsPath: boolean }
+      | { Name: string; AppID: string; IsPath: boolean }[]
     const list = Array.isArray(parsed) ? parsed : [parsed]
-    return list.map((e) => ({ name: e.Name, appId: e.AppID }))
+    return list.map((e) => ({ name: e.Name, appId: e.AppID, isPath: e.IsPath }))
   }
 
   async closeApp(name: string): Promise<ToolResult> {

@@ -1,15 +1,23 @@
 import { app } from 'electron'
 import { InferenceSession, Tensor } from 'onnxruntime-node'
 import { join } from 'path'
-import { config } from '../config'
 import { logInfo, logError } from '../logger'
-import { sensitivityToThreshold, ConsecutiveFrameGate } from './wakewordMath'
+import { sensitivityToThreshold, ConsecutiveFrameGate, RollingPeak } from './wakewordMath'
+import { getPresenceConfig } from './config'
 
 export interface WakeWordStatus {
   ready: boolean
   error: string | null
   frameLength: number | null
   sampleRate: number | null
+  /** Total frames processed since the engine started (or last reset()) — the diagnostic proof that audio is actually reaching the model at all. */
+  framesProcessed: number
+  /** This frame's raw classifier score (0-1), before thresholding — null until the buffers have warmed up enough to produce one. */
+  lastScore: number | null
+  /** Max score over roughly the last 5 seconds — "is it hearing anything close, just not enough" without needing a live log. */
+  recentPeakScore: number
+  /** Current threshold, derived from the live (panel-editable) sensitivity setting — shown next to the scores above so they're directly comparable. */
+  threshold: number
 }
 
 const SAMPLE_RATE = 16000
@@ -85,7 +93,14 @@ class WakeWordEngine {
   private melBuffer: number[][] = [] // each entry: one mel frame (MEL_BINS numbers)
   private featureBuffer: number[][] = [] // each entry: one embedding (EMBEDDING_DIM numbers)
   private predictionCount = 0
-  private gate = new ConsecutiveFrameGate(config.wakeWordConsecutiveFrames)
+  private gate = new ConsecutiveFrameGate(getPresenceConfig().consecutiveFrames)
+
+  // Diagnostics — see WakeWordStatus. Tracked unconditionally (cheap) so
+  // the Presence panel always has a real answer to "is audio actually
+  // reaching the model, and how close is it" instead of a guess.
+  private framesProcessed = 0
+  private lastScore: number | null = null
+  private recentPeak = new RollingPeak(60) // ~4.8s at one 80ms frame each
 
   async start(): Promise<WakeWordStatus> {
     if (this.status().ready || this.starting) return this.status()
@@ -124,7 +139,16 @@ class WakeWordEngine {
 
   status(): WakeWordStatus {
     const ready = this.melspecSession !== null && this.embeddingSession !== null && this.classifierSession !== null
-    return { ready, error: this.lastError, frameLength: FRAME_SAMPLES, sampleRate: SAMPLE_RATE }
+    return {
+      ready,
+      error: this.lastError,
+      frameLength: FRAME_SAMPLES,
+      sampleRate: SAMPLE_RATE,
+      framesProcessed: this.framesProcessed,
+      lastScore: this.lastScore,
+      recentPeakScore: this.recentPeak.peak(),
+      threshold: sensitivityToThreshold(getPresenceConfig().sensitivity)
+    }
   }
 
   /** Discards in-flight buffering and re-primes — called whenever Presence stops actively listening (woke, muted), so stale audio/near-threshold state never leaks into the next listening period. Fire-and-forget: priming is a few ms of local inference, never worth making every caller await. */
@@ -139,6 +163,11 @@ class WakeWordEngine {
     this.featureBuffer = []
     this.predictionCount = 0
     this.gate.reset()
+    // lastScore/recentPeak reset with the listening period they describe —
+    // framesProcessed deliberately does NOT reset here, it's a lifetime
+    // "has audio ever actually reached this engine at all" counter.
+    this.lastScore = null
+    this.recentPeak.reset()
   }
 
   /**
@@ -167,6 +196,7 @@ class WakeWordEngine {
   /** Returns true the instant "hey jarvis" is detected in this frame. `frame.length` must equal `status().frameLength`. */
   async processFrame(frame: Int16Array): Promise<boolean> {
     if (!this.melspecSession || !this.embeddingSession || !this.classifierSession) return false
+    this.framesProcessed++
     try {
       const frameFloat = Float32Array.from(frame)
       const input = new Float32Array(this.rawContext.length + frameFloat.length)
@@ -187,11 +217,15 @@ class WakeWordEngine {
       if (this.featureBuffer.length < CLASSIFIER_WINDOW) return false
 
       const score = await this.runClassifier(this.featureBuffer.slice(-CLASSIFIER_WINDOW))
+      this.lastScore = score
+      this.recentPeak.push(score)
 
       this.predictionCount++
       if (this.predictionCount <= WARMUP_PREDICTIONS) return false
 
-      return this.gate.observe(score, sensitivityToThreshold(config.wakeWordSensitivity))
+      const cfg = getPresenceConfig()
+      this.gate.setRequired(cfg.consecutiveFrames)
+      return this.gate.observe(score, sensitivityToThreshold(cfg.sensitivity))
     } catch (err) {
       logError('presence:wakeword', `processFrame failed: ${err instanceof Error ? err.message : String(err)}`)
       return false

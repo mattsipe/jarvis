@@ -19,7 +19,12 @@ export function sensitivityToThreshold(sensitivity: number): number {
  */
 export class ConsecutiveFrameGate {
   private count = 0
-  constructor(private readonly required: number) {}
+  constructor(private required: number) {}
+
+  /** Live-editable — the Presence panel can change this without recreating the engine. */
+  setRequired(required: number): void {
+    this.required = Math.max(1, Math.round(required))
+  }
 
   /** Feed one frame's score; returns true the instant `required` consecutive frames have cleared the threshold. */
   observe(score: number, threshold: number): boolean {
@@ -29,5 +34,42 @@ export class ConsecutiveFrameGate {
 
   reset(): void {
     this.count = 0
+  }
+}
+
+/**
+ * Rolling max of the last `windowSize` scores — powers the Presence
+ * panel's "recent peak score" diagnostic, so "is the model hearing
+ * anything at all, just not enough" is visible without needing to add
+ * real logging/tracing to debug a live report. Pure ring buffer, no
+ * timestamps needed: at one 80ms frame per push, a 60-frame window is
+ * ~4.8 seconds of history.
+ */
+export class RollingPeak {
+  private readonly buffer: number[]
+  private index = 0
+  private filled = false
+
+  constructor(private readonly windowSize: number) {
+    this.buffer = new Array(windowSize).fill(0)
+  }
+
+  push(value: number): void {
+    this.buffer[this.index] = value
+    this.index = (this.index + 1) % this.windowSize
+    if (this.index === 0) this.filled = true
+  }
+
+  peak(): number {
+    const len = this.filled ? this.windowSize : this.index
+    let max = 0
+    for (let i = 0; i < len; i++) if (this.buffer[i] > max) max = this.buffer[i]
+    return max
+  }
+
+  reset(): void {
+    this.buffer.fill(0)
+    this.index = 0
+    this.filled = false
   }
 }

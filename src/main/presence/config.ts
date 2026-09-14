@@ -8,12 +8,20 @@ export interface PresenceConfig {
   enabled: boolean
   /** Whether JARVIS should start automatically with Windows, hidden, on next login — applied via app.setLoginItemSettings. */
   launchAtLogin: boolean
+  /** 0-1 — higher catches more true wakes at the cost of more false ones. Editable live from the Presence panel; env var only seeds the first run. */
+  sensitivity: number
+  /** How many consecutive 80ms frames must clear the sensitivity threshold before a wake is reported — false-positive protection, also editable live. */
+  consecutiveFrames: number
 }
 
 function defaultConfig(): PresenceConfig {
+  const envSensitivity = process.env.JARVIS_WAKE_WORD_SENSITIVITY ? parseFloat(process.env.JARVIS_WAKE_WORD_SENSITIVITY) : NaN
+  const envConsecutive = process.env.JARVIS_WAKE_WORD_CONSECUTIVE_FRAMES ? parseInt(process.env.JARVIS_WAKE_WORD_CONSECUTIVE_FRAMES, 10) : NaN
   return {
     enabled: process.env.JARVIS_PRESENCE_ENABLED !== 'false',
-    launchAtLogin: process.env.JARVIS_LAUNCH_AT_LOGIN === 'true'
+    launchAtLogin: process.env.JARVIS_LAUNCH_AT_LOGIN === 'true',
+    sensitivity: Number.isFinite(envSensitivity) ? envSensitivity : 0.5,
+    consecutiveFrames: Number.isFinite(envConsecutive) ? envConsecutive : 2
   }
 }
 

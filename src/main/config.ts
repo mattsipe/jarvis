@@ -153,12 +153,6 @@ export const config = {
   elevenLabsApiKey: process.env.ELEVENLABS_API_KEY || '',
   elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID || '2eG0V12z6Hg7luZwRG2V',
   deepgramApiKey: process.env.DEEPGRAM_API_KEY || '',
-  /** 0-1 — higher catches more true positives at the cost of more false wakes. See presence/wakewordMath.ts's sensitivityToThreshold. */
-  wakeWordSensitivity: process.env.JARVIS_WAKE_WORD_SENSITIVITY ? parseFloat(process.env.JARVIS_WAKE_WORD_SENSITIVITY) : 0.5,
-  /** How many consecutive 80ms frames must clear the threshold before a wake is reported — the false-positive-protection knob. */
-  wakeWordConsecutiveFrames: process.env.JARVIS_WAKE_WORD_CONSECUTIVE_FRAMES
-    ? parseInt(process.env.JARVIS_WAKE_WORD_CONSECUTIVE_FRAMES, 10)
-    : 2,
   sttProvider: (process.env.STT_PROVIDER as 'deepgram' | 'whisper') || 'deepgram',
   hotkey: process.env.JARVIS_HOTKEY || 'Control+Space',
   commandCenterHotkey: process.env.JARVIS_COMMAND_CENTER_HOTKEY || 'Control+Shift+Space',

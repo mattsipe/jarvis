@@ -143,10 +143,10 @@ export class DarwinPlatformControl implements PlatformControl {
     }
   }
 
-  /** Dev-parity: AppID === display name here since macOS launches by name via `open -a`, unlike Windows' AppUserModelID. */
-  async listInstalledApps(): Promise<{ name: string; appId: string }[]> {
+  /** Dev-parity: AppID === display name here since macOS launches by name via `open -a`, unlike Windows' AppUserModelID. Always `isPath: true` — there's no AppsFolder-style activation distinct from openApp() on this platform, so apps/catalog.ts should never route these through launchByAppId(). */
+  async listInstalledApps(): Promise<{ name: string; appId: string; isPath: boolean }[]> {
     const apps = await listInstalledApps()
-    return apps.map((name) => ({ name, appId: name }))
+    return apps.map((name) => ({ name, appId: name, isPath: true }))
   }
 
   /** Not meaningful on macOS — there's no packaged-app launch distinct from openApp(). */

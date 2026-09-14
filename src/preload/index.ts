@@ -131,11 +131,18 @@ const jarvisAPI = {
   toggleMuted: (): Promise<unknown> => ipcRenderer.invoke('presence:toggle-muted'),
   /** Only useful if the wake-word engine failed to load (e.g. a corrupted install) — there's no key/account setup step to retry after anymore. */
   retryPresenceEngine: (): Promise<unknown> => ipcRenderer.invoke('presence:retry-engine'),
+  setPresenceSensitivity: (sensitivity: number): Promise<unknown> => ipcRenderer.invoke('presence:set-sensitivity', sensitivity),
+  setPresenceConsecutiveFrames: (consecutiveFrames: number): Promise<unknown> =>
+    ipcRenderer.invoke('presence:set-consecutive-frames', consecutiveFrames),
   /** Broadcast on every Presence state/config change — Ambient uses this to start/stop its own wake-word mic capture; Command Center uses it for the Presence panel. */
   onPresenceState: (cb: (status: Record<string, unknown>) => void) => on('presence:state', cb),
   /** Continuous PCM16 stream from Ambient's always-on wake-word mic — see audio/presenceCapture.ts. Only ever sent while Presence is 'sleeping'. */
   sendPresenceAudioChunk(chunk: ArrayBuffer): void {
     ipcRenderer.send('presence:audio-chunk', chunk)
+  },
+  /** One-shot right after the presence mic opens — see audio/presenceCapture.ts's PresenceMicStatus report. */
+  reportPresenceMicStatus(status: Record<string, unknown>): void {
+    ipcRenderer.send('presence:report-mic-status', status)
   },
 
   /** Dev-only — see ipc.ts's 'dev:test-agent-turn'. Not registered in production; rejects there. */

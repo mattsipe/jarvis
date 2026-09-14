@@ -54,9 +54,21 @@ export interface PlatformControl {
   focusWindow(appName: string): Promise<ToolResult>
   /** Runs a battery of adapter-specific capability checks with no user-visible side effect — see the Command Center's "Run Self-Test". */
   selfTest(): Promise<ToolResult>
-  /** All installed/launchable apps this adapter can enumerate — feeds apps/catalog.ts. Windows: Get-StartApps' {Name, AppID}. macOS: /Applications + ~/Applications, AppID === display name (launched via `open -a`). */
-  listInstalledApps(): Promise<{ name: string; appId: string }[]>
-  /** Launches a packaged/UWP app by its AppUserModelID (Windows: `PackageFamilyName!AppId`, e.g. new Outlook). Not meaningful on macOS. */
+  /**
+   * All installed/launchable apps this adapter can enumerate — feeds
+   * apps/catalog.ts. Windows: Get-StartApps' {Name, AppID}, plus `isPath`
+   * (via Test-Path) telling the catalog whether that AppID is launchable
+   * directly (Start-Process) or needs shell:AppsFolder activation — a real
+   * UWP AppUserModelID and a Click-to-Run-style Office AppID
+   * ("Microsoft.Office.EXCEL.EXE.15") both need the latter despite looking
+   * completely different, which is why this is asked of Windows directly
+   * rather than guessed from the AppID's shape. macOS: /Applications +
+   * ~/Applications, AppID === display name (launched via `open -a`,
+   * always `isPath: true` since there's no AppsFolder-style activation
+   * distinct from openApp() on this platform).
+   */
+  listInstalledApps(): Promise<{ name: string; appId: string; isPath: boolean }[]>
+  /** Launches a packaged/UWP/Click-to-Run app via shell:AppsFolder activation, by its AppID (Windows: `PackageFamilyName!AppId` for true UWP, or a Click-to-Run-style AppID like Office's). Not meaningful on macOS. */
   launchByAppId(appId: string): Promise<ToolResult>
 }
 

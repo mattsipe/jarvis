@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sensitivityToThreshold, ConsecutiveFrameGate } from './wakewordMath'
+import { sensitivityToThreshold, ConsecutiveFrameGate, RollingPeak } from './wakewordMath'
 
 describe('presence/wakewordMath sensitivityToThreshold', () => {
   it('maps the default 0.5 sensitivity to a 0.5 threshold', () => {
@@ -61,5 +61,48 @@ describe('presence/wakewordMath ConsecutiveFrameGate', () => {
     gate.observe(0.9, 0.5)
     gate.reset()
     expect(gate.observe(0.9, 0.5)).toBe(false)
+  })
+
+  it('setRequired() changes the threshold live, without recreating the gate', () => {
+    const gate = new ConsecutiveFrameGate(3)
+    gate.observe(0.9, 0.5)
+    gate.setRequired(1)
+    expect(gate.observe(0.9, 0.5)).toBe(true)
+  })
+
+  it('setRequired() rounds and clamps to at least 1', () => {
+    const gate = new ConsecutiveFrameGate(3)
+    gate.setRequired(0)
+    expect(gate.observe(0.9, 0.5)).toBe(true) // clamped to 1, fires immediately
+  })
+})
+
+describe('presence/wakewordMath RollingPeak', () => {
+  it('reports 0 before anything has been pushed', () => {
+    expect(new RollingPeak(5).peak()).toBe(0)
+  })
+
+  it('reports the max of everything pushed while under the window size', () => {
+    const peak = new RollingPeak(5)
+    peak.push(0.1)
+    peak.push(0.7)
+    peak.push(0.3)
+    expect(peak.peak()).toBeCloseTo(0.7, 6)
+  })
+
+  it('forgets values once they scroll out of the window', () => {
+    const peak = new RollingPeak(3)
+    peak.push(0.9) // will be evicted
+    peak.push(0.1)
+    peak.push(0.2)
+    peak.push(0.3) // evicts the 0.9
+    expect(peak.peak()).toBeCloseTo(0.3, 6)
+  })
+
+  it('reset() clears all history', () => {
+    const peak = new RollingPeak(3)
+    peak.push(0.9)
+    peak.reset()
+    expect(peak.peak()).toBe(0)
   })
 })
